@@ -107,6 +107,28 @@ class TrainingConfig(BaseModel):
     report_to: Literal["wandb", "tensorboard", "none"] = "wandb"
 
 
+class DistillationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    teacher_model: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    teacher_tokenizer: str | None = None
+    teacher_trust_remote_code: bool = True
+    teacher_torch_dtype: Literal["auto", "float32", "float16", "bfloat16"] = "auto"
+    teacher_device_map: str | dict[str, Any] | None = "auto"
+    teacher_batch_size: int = Field(default=1, ge=1)
+    temperature: float = Field(default=0.7, ge=0.0)
+    top_p: float = Field(default=0.9, gt=0.0, le=1.0)
+    max_new_tokens: int = Field(default=128, ge=1)
+    source_data_path: Path = Path("datasets/processed/sft-smoke.jsonl")
+    teacher_cache_path: Path | None = None
+    distill_data_path: Path | None = None
+    overwrite_cache: bool = False
+    require_teacher_latent_marker: bool = False
+    max_teacher_output_chars: int = Field(default=1000, ge=1)
+    deduplicate: bool = True
+    kl_divergence_weight: float = Field(default=0.0, ge=0.0)
+
+
 class OutputConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -150,6 +172,7 @@ class ExperimentConfig(BaseModel):
     soft_prompt: SoftPromptConfig = Field(default_factory=SoftPromptConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    distillation: DistillationConfig = Field(default_factory=DistillationConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 

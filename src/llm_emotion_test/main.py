@@ -9,6 +9,7 @@ from rich.table import Table
 
 from llm_emotion_test.config import ConfigError, config_summary, load_config
 from llm_emotion_test.data.wrime import prepare_wrime_dataset
+from llm_emotion_test.training.distill import train_distill
 from llm_emotion_test.training.sft import train_sft
 
 
@@ -51,6 +52,8 @@ def run_command(command: str, config_path: str | Path, console: Console) -> int:
         return run_prepare_data(config_path, console)
     if command == "train-sft":
         return run_train_sft(config_path, console)
+    if command == "distill":
+        return run_distill(config_path, console)
 
     try:
         config = load_config(config_path)
@@ -87,6 +90,37 @@ def run_train_sft(config_path: str | Path, console: Console) -> int:
     table = Table(title="train-sft summary")
     table.add_column("Key", style="cyan")
     table.add_column("Value")
+    table.add_row("final_checkpoint", str(metrics["final_checkpoint"]))
+    table.add_row("eval_loss", str(metrics["eval"].get("eval_loss")))
+    table.add_row(
+        "sample_latent_marker_accuracy",
+        str(metrics["sample_latent_marker_accuracy"]),
+    )
+    console.print(table)
+    return 0
+
+
+def run_distill(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        metrics = train_distill(config)
+    except Exception as exc:
+        console.print(f"[bold red]Distillation failed:[/bold red] {exc}")
+        return 1
+
+    distill_stats = metrics["distillation"]
+    table = Table(title="distill summary")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("distill_data", str(distill_stats["output_path"]))
+    table.add_row("student_data", str(distill_stats["student_data_path"]))
+    table.add_row("teacher_cache", str(distill_stats["teacher_cache_path"]))
+    table.add_row("num_distill_records", str(distill_stats["num_distill_records"]))
     table.add_row("final_checkpoint", str(metrics["final_checkpoint"]))
     table.add_row("eval_loss", str(metrics["eval"].get("eval_loss")))
     table.add_row(
