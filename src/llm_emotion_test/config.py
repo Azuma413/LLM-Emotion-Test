@@ -17,6 +17,14 @@ class ModelConfig(BaseModel):
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct"
     tokenizer: str | None = None
     trust_remote_code: bool = True
+    torch_dtype: Literal["auto", "float32", "float16", "bfloat16"] = "auto"
+    device_map: str | dict[str, Any] | None = "auto"
+    use_lora: bool = False
+    use_qlora: bool = False
+    lora_r: int = Field(default=16, ge=1)
+    lora_alpha: int = Field(default=32, ge=1)
+    lora_dropout: float = Field(default=0.05, ge=0.0, le=1.0)
+    lora_target_modules: list[str] | None = None
 
 
 class SoftPromptConfig(BaseModel):
@@ -26,12 +34,21 @@ class SoftPromptConfig(BaseModel):
     prompt_length: int = Field(default=4, ge=1)
     init_strategy: Literal["normal", "mean_token", "zeros"] = "normal"
     latent_marker_template: str = "<|emotion|>{latent_id:03d}<|/emotion|>"
+    invalid_latent_fallback: Literal["previous", "neutral", "error"] = "previous"
+    neutral_latent_id: int = Field(default=0, ge=0)
 
     @field_validator("latent_marker_template")
     @classmethod
     def latent_marker_template_has_id(cls, value: str) -> str:
         if "{latent_id" not in value:
             raise ValueError("latent_marker_template must include a {latent_id} placeholder")
+        return value
+
+    @field_validator("neutral_latent_id")
+    @classmethod
+    def neutral_latent_id_is_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("neutral_latent_id must be non-negative")
         return value
 
 
