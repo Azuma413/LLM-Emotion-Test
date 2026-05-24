@@ -10,6 +10,7 @@ from rich.table import Table
 from llm_emotion_test.config import ConfigError, config_summary, load_config
 from llm_emotion_test.data.wrime import prepare_wrime_dataset
 from llm_emotion_test.training.distill import train_distill
+from llm_emotion_test.training.rl import run_rule_based_rl_smoke
 from llm_emotion_test.training.sft import train_sft
 
 
@@ -54,6 +55,8 @@ def run_command(command: str, config_path: str | Path, console: Console) -> int:
         return run_train_sft(config_path, console)
     if command == "distill":
         return run_distill(config_path, console)
+    if command == "train-rl":
+        return run_train_rl(config_path, console)
 
     try:
         config = load_config(config_path)
@@ -127,6 +130,31 @@ def run_distill(config_path: str | Path, console: Console) -> int:
         "sample_latent_marker_accuracy",
         str(metrics["sample_latent_marker_accuracy"]),
     )
+    console.print(table)
+    return 0
+
+
+def run_train_rl(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        metrics = run_rule_based_rl_smoke(config)
+    except Exception as exc:
+        console.print(f"[bold red]RL smoke run failed:[/bold red] {exc}")
+        return 1
+
+    table = Table(title="train-rl summary")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("mode", str(metrics["mode"]))
+    table.add_row("num_episodes", str(metrics["num_episodes"]))
+    table.add_row("success_rate", str(metrics["success_rate"]))
+    table.add_row("mean_total_reward", str(metrics["mean_total_reward"]))
+    table.add_row("transcript_path", str(metrics["transcript_path"]))
     console.print(table)
     return 0
 

@@ -65,3 +65,23 @@ def test_distill_loads_config(monkeypatch) -> None:
     exit_code = main(["distill", "--config", "configs/distill.yaml"])
 
     assert exit_code == 0
+
+
+def test_train_rl_loads_config(monkeypatch) -> None:
+    def fake_run_rule_based_rl_smoke(config):
+        return {
+            "mode": "rule_based_smoke",
+            "num_episodes": config.rl_task.num_episodes,
+            "success_rate": 1.0,
+            "mean_total_reward": 1.1,
+            "transcript_path": str(config.output.run_dir / config.rl_task.transcript_filename),
+        }
+
+    monkeypatch.setattr(
+        "llm_emotion_test.main.run_rule_based_rl_smoke",
+        fake_run_rule_based_rl_smoke,
+    )
+
+    exit_code = main(["train-rl", "--config", "configs/rl_grpo.yaml"])
+
+    assert exit_code == 0

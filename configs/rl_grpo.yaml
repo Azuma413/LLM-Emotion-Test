@@ -6,6 +6,19 @@ training:
   learning_rate: 0.000001
   batch_size: 1
   max_steps: 10
+  report_to: none
+rl_task:
+  code_length: 4
+  allow_repeats: false
+  difficulty: easy
+  min_constraints_per_agent: 2
+  max_constraints_per_agent: 4
+  min_private_candidates: 2
+  max_candidate_balance_ratio: 4.0
+  max_turns: 3
+  num_episodes: 2
+  rollouts_per_problem: 1
+  transcript_filename: rl_transcripts.jsonl
 output:
   root: outputs/runs
   run_id: rl-grpo-smoke

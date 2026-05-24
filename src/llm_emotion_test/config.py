@@ -129,6 +129,60 @@ class DistillationConfig(BaseModel):
     kl_divergence_weight: float = Field(default=0.0, ge=0.0)
 
 
+class RLTaskConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code_length: int = Field(default=4, ge=4, le=5)
+    digits: list[int] = Field(default_factory=lambda: list(range(10)))
+    allow_repeats: bool = False
+    difficulty: Literal["easy", "medium", "hard"] = "easy"
+    num_agents: int = Field(default=2, ge=2, le=2)
+    min_constraints_per_agent: int = Field(default=2, ge=1)
+    max_constraints_per_agent: int = Field(default=4, ge=1)
+    min_private_candidates: int = Field(default=2, ge=2)
+    max_candidate_balance_ratio: float = Field(default=4.0, ge=1.0)
+    max_generation_attempts: int = Field(default=200, ge=1)
+    max_turns: int = Field(default=3, ge=1)
+    num_episodes: int = Field(default=2, ge=1)
+    rollouts_per_problem: int = Field(default=1, ge=1)
+    transcript_filename: str = "rl_transcripts.jsonl"
+    allowed_constraint_types: list[str] = Field(
+        default_factory=lambda: [
+            "parity",
+            "comparison",
+            "difference",
+            "sum",
+            "forbidden_values",
+            "allowed_values",
+            "all_distinct",
+            "contains",
+            "not_contains",
+            "parity_count",
+        ]
+    )
+
+    @field_validator("digits")
+    @classmethod
+    def digits_are_unique_decimal_values(cls, value: list[int]) -> list[int]:
+        if not value:
+            raise ValueError("digits must not be empty")
+        if len(set(value)) != len(value):
+            raise ValueError("digits must be unique")
+        if any(digit < 0 or digit > 9 for digit in value):
+            raise ValueError("digits must be decimal values in [0, 9]")
+        return value
+
+    @field_validator("max_constraints_per_agent")
+    @classmethod
+    def max_constraints_not_less_than_min(cls, value: int, info) -> int:
+        min_value = info.data.get("min_constraints_per_agent")
+        if min_value is not None and value < min_value:
+            raise ValueError(
+                "max_constraints_per_agent must be >= min_constraints_per_agent"
+            )
+        return value
+
+
 class OutputConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -173,6 +227,7 @@ class ExperimentConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     distillation: DistillationConfig = Field(default_factory=DistillationConfig)
+    rl_task: RLTaskConfig = Field(default_factory=RLTaskConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
