@@ -9,6 +9,7 @@ from rich.table import Table
 
 from llm_emotion_test.config import ConfigError, config_summary, load_config
 from llm_emotion_test.data.wrime import prepare_wrime_dataset
+from llm_emotion_test.evaluation.evaluator import run_evaluation
 from llm_emotion_test.training.distill import train_distill
 from llm_emotion_test.training.rl import run_rule_based_rl_smoke
 from llm_emotion_test.training.sft import train_sft
@@ -57,6 +58,8 @@ def run_command(command: str, config_path: str | Path, console: Console) -> int:
         return run_distill(config_path, console)
     if command == "train-rl":
         return run_train_rl(config_path, console)
+    if command == "evaluate":
+        return run_evaluate(config_path, console)
 
     try:
         config = load_config(config_path)
@@ -165,6 +168,31 @@ def run_train_rl(config_path: str | Path, console: Console) -> int:
         table.add_row("rollout_buffer_path", str(metrics["rollout_buffer_path"]))
     if "checkpoint_path" in metrics:
         table.add_row("checkpoint_path", str(metrics["checkpoint_path"]))
+    console.print(table)
+    return 0
+
+
+def run_evaluate(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        metrics = run_evaluation(config)
+    except Exception as exc:
+        console.print(f"[bold red]Evaluation failed:[/bold red] {exc}")
+        return 1
+
+    table = Table(title="evaluate summary")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("num_variants", str(metrics["num_variants"]))
+    table.add_row("num_tasks", str(metrics["num_tasks"]))
+    table.add_row("metrics_csv", str(metrics["metrics_csv_path"]))
+    table.add_row("transcripts", str(metrics["transcript_path"]))
+    table.add_row("report", str(metrics["report_path"]))
     console.print(table)
     return 0
 

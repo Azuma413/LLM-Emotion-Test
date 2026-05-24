@@ -193,6 +193,44 @@ class RLTaskConfig(BaseModel):
         return value
 
 
+class EvaluationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    num_tasks: int = Field(default=8, ge=1)
+    task_seed_offset: int = 50_000
+    variants: list[
+        Literal[
+            "base_model",
+            "sft_model",
+            "distilled_model",
+            "rl_model",
+            "latent_fixed",
+            "latent_random",
+            "no_latent",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "base_model",
+            "sft_model",
+            "distilled_model",
+            "rl_model",
+            "latent_fixed",
+            "latent_random",
+            "no_latent",
+        ]
+    )
+    source_run_dir: Path | None = None
+    transcript_sample_count: int = Field(default=3, ge=0)
+    failure_sample_count: int = Field(default=3, ge=0)
+    metrics_csv_filename: str = "evaluation_metrics.csv"
+    report_filename: str = "evaluation_report.md"
+    transcript_filename: str = "evaluation_transcripts.jsonl"
+    comparison_filename: str = "model_comparison.jsonl"
+    latent_heatmap_filename: str = "latent_transition_heatmap.svg"
+    reward_curve_filename: str = "reward_curve.svg"
+    emotion_distribution_filename: str = "emotion_distribution.svg"
+
+
 class OutputConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -238,6 +276,7 @@ class ExperimentConfig(BaseModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     distillation: DistillationConfig = Field(default_factory=DistillationConfig)
     rl_task: RLTaskConfig = Field(default_factory=RLTaskConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
