@@ -23,9 +23,9 @@ class SoftPromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     num_latents: int = Field(default=8, ge=1)
-    prompt_length: int = Field(default=8, ge=1)
+    prompt_length: int = Field(default=4, ge=1)
     init_strategy: Literal["normal", "mean_token", "zeros"] = "normal"
-    latent_marker_template: str = "<|emotion_latent:{latent_id:03d}|>"
+    latent_marker_template: str = "<|emotion|>{latent_id:03d}<|/emotion|>"
 
     @field_validator("latent_marker_template")
     @classmethod
@@ -38,12 +38,35 @@ class SoftPromptConfig(BaseModel):
 class DataConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    dataset_name: str = "google-research-datasets/go_emotions"
-    dataset_config: str | None = "simplified"
+    dataset_name: str = "shunk031/wrime"
+    dataset_config: str | None = "ver1"
     raw_dir: Path = Path("datasets/raw")
     processed_dir: Path = Path("datasets/processed")
+    processed_filename: str = "sft.jsonl"
+    text_column: str = "sentence"
+    annotation_source: Literal["writer", "reader1", "reader2", "reader3", "avg_readers"] = (
+        "writer"
+    )
+    emotion_labels: list[str] = Field(
+        default_factory=lambda: [
+            "joy",
+            "sadness",
+            "anticipation",
+            "surprise",
+            "anger",
+            "fear",
+            "disgust",
+            "trust",
+        ]
+    )
+    representative_label_map: dict[str, str] = Field(default_factory=dict)
+    copy_input_latent_probability: float = Field(default=0.5, ge=0.0, le=1.0)
     max_samples: int | None = Field(default=None, ge=1)
     seed: int = 42
+
+    @property
+    def processed_path(self) -> Path:
+        return self.processed_dir / self.processed_filename
 
 
 class TrainingConfig(BaseModel):

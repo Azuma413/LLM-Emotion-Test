@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from llm_emotion_test.config import ConfigError, config_summary, load_config
+from llm_emotion_test.data.wrime import prepare_wrime_dataset
 
 
 COMMANDS = {
@@ -45,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_command(command: str, config_path: str | Path, console: Console) -> int:
+    if command == "prepare-data":
+        return run_prepare_data(config_path, console)
+
     try:
         config = load_config(config_path)
     except ConfigError as exc:
@@ -61,6 +65,43 @@ def run_command(command: str, config_path: str | Path, console: Console) -> int:
     console.print(
         "[yellow]Pipeline implementation for this command starts in the next phase.[/yellow]"
     )
+    return 0
+
+
+def run_prepare_data(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        stats = prepare_wrime_dataset(config)
+    except Exception as exc:
+        console.print(f"[bold red]Data preparation failed:[/bold red] {exc}")
+        return 1
+
+    summary = Table(title="prepare-data summary")
+    summary.add_column("Key", style="cyan")
+    summary.add_column("Value")
+    summary.add_row("output_path", str(stats["output_path"]))
+    summary.add_row("num_samples", str(stats["num_samples"]))
+    summary.add_row("text_length", str(stats["text_length"]))
+    console.print(summary)
+
+    for key in (
+        "split_counts",
+        "label_counts",
+        "input_latent_counts",
+        "target_latent_counts",
+    ):
+        table = Table(title=key)
+        table.add_column("Value", style="cyan")
+        table.add_column("Count")
+        for value, count in stats[key].items():
+            table.add_row(str(value), str(count))
+        console.print(table)
+
     return 0
 
 

@@ -6,14 +6,28 @@ model:
   trust_remote_code: true
 soft_prompt:
   num_latents: 8
-  prompt_length: 8
+  prompt_length: 4
   init_strategy: normal
-  latent_marker_template: "<|emotion_latent:{latent_id:03d}|>"
+  latent_marker_template: "<|emotion|>{latent_id:03d}<|/emotion|>"
 data:
-  dataset_name: google-research-datasets/go_emotions
-  dataset_config: simplified
+  dataset_name: shunk031/wrime
+  dataset_config: ver1
   raw_dir: datasets/raw
   processed_dir: datasets/processed
+  processed_filename: sft.jsonl
+  text_column: sentence
+  annotation_source: writer
+  emotion_labels:
+    - joy
+    - sadness
+    - anticipation
+    - surprise
+    - anger
+    - fear
+    - disgust
+    - trust
+  representative_label_map: {}
+  copy_input_latent_probability: 0.5
   max_samples: 100
   seed: 42
 training:

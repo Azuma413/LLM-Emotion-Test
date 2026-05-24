@@ -4,10 +4,13 @@ model:
   base_model: Qwen/Qwen2.5-0.5B-Instruct
 soft_prompt:
   num_latents: 8
-  prompt_length: 8
+  prompt_length: 4
 data:
-  dataset_name: google-research-datasets/go_emotions
-  dataset_config: simplified
+  dataset_name: shunk031/wrime
+  dataset_config: ver1
+  processed_filename: sft-smoke.jsonl
+  text_column: sentence
+  annotation_source: writer
   max_samples: 100
 training:
   learning_rate: 0.00002
