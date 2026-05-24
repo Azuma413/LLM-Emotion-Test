@@ -64,3 +64,16 @@ def test_parse_agent_action_extracts_answer_and_latent() -> None:
     assert action.proposal == "1234"
     assert action.next_latent_id == 2
     assert "<answer>" not in action.message_text
+
+
+def test_parse_agent_action_records_marker_failure_with_fallback() -> None:
+    action = parse_agent_action(
+        "制約を共有します。",
+        previous_latent_id=3,
+        num_latents=8,
+        marker_template="<|emotion|>{latent_id:03d}<|/emotion|>",
+        fallback="previous",
+    )
+
+    assert action.next_latent_id == 3
+    assert action.parse_error is not None

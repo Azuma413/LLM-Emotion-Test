@@ -154,7 +154,17 @@ def run_train_rl(config_path: str | Path, console: Console) -> int:
     table.add_row("num_episodes", str(metrics["num_episodes"]))
     table.add_row("success_rate", str(metrics["success_rate"]))
     table.add_row("mean_total_reward", str(metrics["mean_total_reward"]))
+    if "num_rollout_steps" in metrics:
+        table.add_row("num_rollout_steps", str(metrics["num_rollout_steps"]))
+    if "latent_usage_entropy" in metrics:
+        table.add_row("latent_usage_entropy", str(metrics["latent_usage_entropy"]))
+    if "parser_failure_rate" in metrics:
+        table.add_row("parser_failure_rate", str(metrics["parser_failure_rate"]))
     table.add_row("transcript_path", str(metrics["transcript_path"]))
+    if "rollout_buffer_path" in metrics:
+        table.add_row("rollout_buffer_path", str(metrics["rollout_buffer_path"]))
+    if "checkpoint_path" in metrics:
+        table.add_row("checkpoint_path", str(metrics["checkpoint_path"]))
     console.print(table)
     return 0
 

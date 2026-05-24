@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from llm_emotion_test.models.latent import parse_latent_id
+from llm_emotion_test.models.latent import LatentMarkerSpec, parse_latent_id
 from llm_emotion_test.tasks.hidden_constraints import (
     Code,
     Constraint,
@@ -172,6 +172,12 @@ def parse_agent_action(
     neutral_latent_id: int = 0,
 ) -> AgentAction:
     parse_error = None
+    marker_spec = LatentMarkerSpec(marker_template)
+    marker_matches = list(marker_spec.pattern().finditer(text))
+    if not marker_matches:
+        parse_error = "Generated text does not contain a latent marker"
+    elif not any(0 <= int(match.group("latent_id")) < num_latents for match in marker_matches):
+        parse_error = "Generated text does not contain a valid latent marker"
     try:
         latent_id = parse_latent_id(
             text,

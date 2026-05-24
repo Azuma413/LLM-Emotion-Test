@@ -84,7 +84,10 @@ class SoftPromptCausalLM(nn.Module):
             )
 
         token_embeddings = self.get_input_embeddings()(input_ids)
-        prompt_embeddings = self.soft_prompt(latent_ids).to(dtype=token_embeddings.dtype)
+        prompt_embeddings = self.soft_prompt(latent_ids).to(
+            device=token_embeddings.device,
+            dtype=token_embeddings.dtype,
+        )
         inputs_embeds = torch.cat([prompt_embeddings, token_embeddings], dim=1)
 
         prompt_mask = torch.ones(
@@ -127,7 +130,10 @@ class SoftPromptCausalLM(nn.Module):
                 input_ids.shape[0], dtype=torch.long, device=input_ids.device
             )
         token_embeddings = self.get_input_embeddings()(input_ids)
-        prompt_embeddings = self.soft_prompt(latent_ids).to(dtype=token_embeddings.dtype)
+        prompt_embeddings = self.soft_prompt(latent_ids).to(
+            device=token_embeddings.device,
+            dtype=token_embeddings.dtype,
+        )
         inputs_embeds = torch.cat([prompt_embeddings, token_embeddings], dim=1)
 
         if attention_mask is None:

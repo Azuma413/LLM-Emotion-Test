@@ -132,6 +132,7 @@ class DistillationConfig(BaseModel):
 class RLTaskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    policy_backend: Literal["llm", "tabular_smoke"] = "llm"
     code_length: int = Field(default=4, ge=4, le=5)
     digits: list[int] = Field(default_factory=lambda: list(range(10)))
     allow_repeats: bool = False
@@ -144,7 +145,16 @@ class RLTaskConfig(BaseModel):
     max_generation_attempts: int = Field(default=200, ge=1)
     max_turns: int = Field(default=3, ge=1)
     num_episodes: int = Field(default=2, ge=1)
-    rollouts_per_problem: int = Field(default=1, ge=1)
+    rollouts_per_problem: int = Field(default=4, ge=1)
+    reward_team_weight: float = Field(default=1.0, ge=0.0)
+    latent_policy_learning_rate: float = Field(default=0.1, gt=0.0)
+    train_base_model: bool = False
+    sampling_temperature: float = Field(default=1.0, ge=0.0)
+    sampling_top_p: float = Field(default=1.0, gt=0.0, le=1.0)
+    grpo_advantage_epsilon: float = Field(default=1e-6, gt=0.0)
+    eval_episodes: int = Field(default=2, ge=1)
+    checkpoint_filename: str = "rl_checkpoint.json"
+    resume_from_checkpoint: Path | None = None
     transcript_filename: str = "rl_transcripts.jsonl"
     allowed_constraint_types: list[str] = Field(
         default_factory=lambda: [
