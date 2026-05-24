@@ -1,0 +1,19 @@
+experiment_name: llm-emotion-test-sft
+stage: sft
+model:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+soft_prompt:
+  num_latents: 8
+  prompt_length: 8
+data:
+  dataset_name: google-research-datasets/go_emotions
+  dataset_config: simplified
+  max_samples: 100
+training:
+  learning_rate: 0.00002
+  batch_size: 1
+  max_steps: 10
+  report_to: wandb
+output:
+  root: outputs/runs
+  run_id: sft-smoke

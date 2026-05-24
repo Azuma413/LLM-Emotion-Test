@@ -1,0 +1,31 @@
+experiment_name: llm-emotion-test
+stage: base
+model:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  tokenizer: null
+  trust_remote_code: true
+soft_prompt:
+  num_latents: 8
+  prompt_length: 8
+  init_strategy: normal
+  latent_marker_template: "<|emotion_latent:{latent_id:03d}|>"
+data:
+  dataset_name: google-research-datasets/go_emotions
+  dataset_config: simplified
+  raw_dir: datasets/raw
+  processed_dir: datasets/processed
+  max_samples: 100
+  seed: 42
+training:
+  learning_rate: 0.00002
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  max_steps: 10
+  precision: bf16
+  report_to: wandb
+output:
+  root: outputs/runs
+  run_id: smoke
+runtime:
+  device: auto
+  seed: 42

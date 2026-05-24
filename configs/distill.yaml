@@ -1,0 +1,14 @@
+experiment_name: llm-emotion-test-distill
+stage: distill
+model:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+data:
+  processed_dir: datasets/distill
+  max_samples: 100
+training:
+  learning_rate: 0.00002
+  batch_size: 1
+  max_steps: 10
+output:
+  root: outputs/runs
+  run_id: distill-smoke

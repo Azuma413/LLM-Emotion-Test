@@ -1,0 +1,11 @@
+experiment_name: llm-emotion-test-rl-grpo
+stage: rl_grpo
+model:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+training:
+  learning_rate: 0.000001
+  batch_size: 1
+  max_steps: 10
+output:
+  root: outputs/runs
+  run_id: rl-grpo-smoke

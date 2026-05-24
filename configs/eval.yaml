@@ -1,0 +1,10 @@
+experiment_name: llm-emotion-test-eval
+stage: eval
+model:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+data:
+  processed_dir: datasets/processed
+  max_samples: 100
+output:
+  root: outputs/runs
+  run_id: eval-smoke
