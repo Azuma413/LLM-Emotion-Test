@@ -5,12 +5,13 @@ import pytest
 from llm_emotion_test.config import ConfigError, load_config
 
 
-def test_load_base_config() -> None:
-    config = load_config(Path("configs/base.yaml"))
+def test_load_default_sft_config() -> None:
+    config = load_config(Path("configs/sft.yaml"))
 
-    assert config.stage == "base"
-    assert config.output.run_dir == Path("outputs/runs/smoke")
-    assert config.output.checkpoints_dir == Path("outputs/runs/smoke/checkpoints")
+    assert config.stage == "sft"
+    assert config.output.run_dir == Path("outputs/runs/sft")
+    assert config.output.checkpoints_dir == Path("outputs/runs/sft/checkpoints")
+    assert config.training.max_steps is None
 
 
 def test_config_validation_error_is_readable(tmp_path: Path) -> None:

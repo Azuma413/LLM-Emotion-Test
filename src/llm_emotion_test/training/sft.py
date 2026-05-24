@@ -140,20 +140,23 @@ def build_training_arguments(config: ExperimentConfig) -> TrainingArguments:
         "per_device_eval_batch_size": config.training.batch_size,
         "gradient_accumulation_steps": config.training.gradient_accumulation_steps,
         "learning_rate": config.training.learning_rate,
-        "max_steps": config.training.max_steps,
         "num_train_epochs": config.training.num_train_epochs,
         "logging_steps": config.training.logging_steps,
         "warmup_steps": config.training.warmup_steps,
         "weight_decay": config.training.weight_decay,
-        "save_steps": config.training.save_steps or config.training.max_steps,
         "save_strategy": "steps" if config.training.save_steps else "no",
         "report_to": [] if config.training.report_to == "none" else [config.training.report_to],
         "remove_unused_columns": False,
         "bf16": config.training.precision == "bf16",
         "fp16": config.training.precision == "fp16",
     }
+    if config.training.max_steps is not None:
+        kwargs["max_steps"] = config.training.max_steps
+    if config.training.save_steps is not None:
+        kwargs["save_steps"] = config.training.save_steps
     eval_steps = config.training.eval_steps
-    kwargs["eval_steps"] = eval_steps or config.training.max_steps
+    if eval_steps is not None:
+        kwargs["eval_steps"] = eval_steps
     kwargs["eval_strategy" if _training_arguments_accepts_eval_strategy() else "evaluation_strategy"] = (
         "steps" if eval_steps else "no"
     )

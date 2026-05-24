@@ -1,16 +1,18 @@
 experiment_name: llm-emotion-test-eval
 stage: eval
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
   torch_dtype: bfloat16
   device_map: auto
 data:
   processed_dir: datasets/processed
-  max_samples: 32
+  max_samples:
 training:
+  max_steps:
+  generation_max_new_tokens: 64
   report_to: none
 rl_task:
-  policy_backend: tabular_smoke
+  policy_backend: llm
   code_length: 4
   allow_repeats: false
   difficulty: easy
@@ -20,18 +22,20 @@ rl_task:
   max_candidate_balance_ratio: 4.0
   max_generation_attempts: 500
   max_turns: 3
-  eval_episodes: 4
+  eval_episodes: 16
   checkpoint_filename: rl_checkpoint.json
 evaluation:
-  num_tasks: 4
+  num_tasks: 100
   task_seed_offset: 50000
-  source_run_dir: outputs/runs/rl-grpo-gpu
-  model_variant_backend: auto
-  sft_model_checkpoint_dir: outputs/runs/sft-gpu/checkpoints/final
-  distilled_model_checkpoint_dir: outputs/runs/distill-gpu/checkpoints/final
-  rl_model_checkpoint_dir: outputs/runs/rl-grpo-gpu/checkpoints/final
-  transcript_sample_count: 3
-  failure_sample_count: 3
+  source_run_dir: outputs/runs/rl-grpo
+  model_variant_backend: llm
+  sft_model_checkpoint_dir: outputs/runs/sft/checkpoints/final
+  distilled_model_checkpoint_dir: outputs/runs/distill/checkpoints/final
+  rl_model_checkpoint_dir: outputs/runs/rl-grpo/checkpoints/final
+  transcript_sample_count: 10
+  failure_sample_count: 10
 output:
   root: outputs/runs
-  run_id: eval-gpu
+  run_id: eval
+runtime:
+  require_gpu: true

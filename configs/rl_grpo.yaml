@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test-rl-grpo
 stage: rl_grpo
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
   torch_dtype: bfloat16
   device_map: auto
   use_lora: true
@@ -13,13 +13,13 @@ model:
 training:
   learning_rate: 0.000001
   batch_size: 1
-  max_steps: 1
-  max_seq_length: 512
-  generation_max_new_tokens: 32
+  max_steps:
+  max_seq_length: 1024
+  generation_max_new_tokens: 64
   report_to: none
 rl_task:
   policy_backend: llm
-  resume_from_checkpoint: outputs/runs/distill-gpu/checkpoints/final
+  resume_from_checkpoint: outputs/runs/distill/checkpoints/final
   code_length: 4
   allow_repeats: false
   difficulty: easy
@@ -27,16 +27,16 @@ rl_task:
   max_constraints_per_agent: 4
   min_private_candidates: 2
   max_candidate_balance_ratio: 4.0
-  max_turns: 2
-  num_episodes: 1
-  rollouts_per_problem: 2
-  eval_episodes: 1
+  max_turns: 3
+  num_episodes: 100
+  rollouts_per_problem: 4
+  eval_episodes: 16
   sampling_temperature: 1.0
   sampling_top_p: 1.0
   transcript_filename: rl_transcripts.jsonl
   third_party_backend: rule_based
 output:
   root: outputs/runs
-  run_id: rl-grpo-gpu
+  run_id: rl-grpo
 runtime:
   require_gpu: true

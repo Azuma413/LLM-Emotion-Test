@@ -38,8 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default="configs/base.yaml",
-        help="Path to a YAML config file. Defaults to configs/base.yaml.",
+        default="configs/sft.yaml",
+        help="Path to a YAML config file. Defaults to configs/sft.yaml.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -325,7 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    config_path = args.config or "configs/base.yaml"
+    config_path = args.config or "configs/sft.yaml"
     return run_command(args.command, config_path, Console())
 
 

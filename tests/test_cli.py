@@ -26,7 +26,7 @@ def test_prepare_data_loads_config(monkeypatch) -> None:
         "llm_emotion_test.main.prepare_wrime_dataset", fake_prepare_wrime_dataset
     )
 
-    exit_code = main(["prepare-data", "--config", "configs/base.yaml"])
+    exit_code = main(["prepare-data", "--config", "configs/sft.yaml"])
 
     assert exit_code == 0
 

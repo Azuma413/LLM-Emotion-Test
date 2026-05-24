@@ -93,7 +93,7 @@ class TrainingConfig(BaseModel):
     learning_rate: float = Field(default=2e-5, gt=0)
     batch_size: int = Field(default=1, ge=1)
     gradient_accumulation_steps: int = Field(default=1, ge=1)
-    max_steps: int = Field(default=10, ge=1)
+    max_steps: int | None = Field(default=10, ge=1)
     max_seq_length: int = Field(default=512, ge=8)
     precision: Literal["fp32", "fp16", "bf16"] = "bf16"
     logging_steps: int = Field(default=1, ge=1)

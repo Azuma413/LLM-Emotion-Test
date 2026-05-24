@@ -203,7 +203,7 @@ def train_at_grpo_llm(config: ExperimentConfig) -> dict[str, Any]:
     losses: list[float] = []
 
     for episode_index in range(start_episode, config.rl_task.num_episodes):
-        if episode_index >= config.training.max_steps:
+        if config.training.max_steps is not None and episode_index >= config.training.max_steps:
             break
         rollout = run_llm_tree_rollout(
             config,

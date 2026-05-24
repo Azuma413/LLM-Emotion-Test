@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test-distill
 stage: distill
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
   torch_dtype: bfloat16
   device_map: auto
   use_lora: true
@@ -12,31 +12,35 @@ model:
     - o_proj
 data:
   processed_dir: datasets/distill
-  processed_filename: student-sft-gpu.jsonl
-  max_samples: 8
+  processed_filename: student-sft.jsonl
+  max_samples:
 training:
   learning_rate: 0.00002
   batch_size: 1
-  max_steps: 2
-  max_seq_length: 512
+  gradient_accumulation_steps: 8
+  max_steps:
+  max_seq_length: 1024
   precision: bf16
-  logging_steps: 1
-  eval_steps: 1
-  save_steps:
-  eval_max_samples: 8
-  sample_count: 1
-  generation_max_new_tokens: 32
+  logging_steps: 50
+  eval_steps: 500
+  save_steps: 500
+  warmup_steps: 100
+  weight_decay: 0.01
+  num_train_epochs: 1.0
+  eval_max_samples: 32
+  sample_count: 8
+  generation_max_new_tokens: 128
   report_to: none
 distillation:
-  teacher_model: Qwen/Qwen2.5-0.5B-Instruct
+  teacher_model: Qwen/Qwen3.5-9B
   teacher_torch_dtype: bfloat16
   teacher_device_map: auto
   teacher_batch_size: 1
   temperature: 0.7
   top_p: 0.9
-  max_new_tokens: 32
-  source_data_path: datasets/processed/sft-gpu.jsonl
-  student_checkpoint_dir: outputs/runs/sft-gpu/checkpoints/final
+  max_new_tokens: 128
+  source_data_path: datasets/processed/sft.jsonl
+  student_checkpoint_dir: outputs/runs/sft/checkpoints/final
   overwrite_cache: false
   require_teacher_latent_marker: false
   max_teacher_output_chars: 1000
@@ -44,6 +48,6 @@ distillation:
   kl_divergence_weight: 0.0
 output:
   root: outputs/runs
-  run_id: distill-gpu
+  run_id: distill
 runtime:
   require_gpu: true

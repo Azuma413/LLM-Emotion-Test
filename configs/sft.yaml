@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test-sft
 stage: sft
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
   torch_dtype: bfloat16
   device_map: auto
   use_lora: true
@@ -11,31 +11,51 @@ model:
     - v_proj
     - o_proj
 soft_prompt:
-  num_latents: 8
-  prompt_length: 4
+  num_latents: 8 # emotion IDの個数
+  prompt_length: 4 # emotion IDごとのトークン数
+  init_strategy: normal
+  latent_marker_template: "<|emotion|>{latent_id:03d}<|/emotion|>"
 data:
   dataset_name: shunk031/wrime
   dataset_config: ver1
-  processed_filename: sft-gpu.jsonl
+  raw_dir: datasets/raw
+  processed_dir: datasets/processed
+  processed_filename: sft.jsonl
+  summary_filename: data_summary.json
   text_column: sentence
   annotation_source: writer
-  max_samples: 32
+  emotion_labels:
+    - joy
+    - sadness
+    - anticipation
+    - surprise
+    - anger
+    - fear
+    - disgust
+    - trust
+  representative_label_map: {}
+  copy_input_latent_probability: 0.5
+  max_samples:
+  seed: 42
 training:
   learning_rate: 0.00002
   batch_size: 1
-  gradient_accumulation_steps: 1
-  max_steps: 2
-  max_seq_length: 512
+  gradient_accumulation_steps: 8
+  max_steps:
+  max_seq_length: 1024
   precision: bf16
-  logging_steps: 1
-  eval_steps: 1
-  save_steps:
+  logging_steps: 50
+  eval_steps: 500
+  save_steps: 500
+  warmup_steps: 100
+  weight_decay: 0.01
+  num_train_epochs: 3.0
   eval_max_samples: 16
-  sample_count: 1
-  generation_max_new_tokens: 32
+  sample_count: 8
+  generation_max_new_tokens: 128
   report_to: none
 output:
   root: outputs/runs
-  run_id: sft-gpu
+  run_id: sft
 runtime:
   require_gpu: true
