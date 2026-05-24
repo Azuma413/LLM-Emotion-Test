@@ -179,7 +179,10 @@ class SoftPromptCausalLM(nn.Module):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         self.save_soft_prompt(output_path)
-        self.base_model.save_pretrained(output_path / "base_or_adapter")
+        self.base_model.save_pretrained(
+            output_path / "base_or_adapter",
+            safe_serialization=False,
+        )
         if tokenizer is not None:
             tokenizer.save_pretrained(output_path / "tokenizer")
         metadata = {
@@ -197,6 +200,7 @@ class SoftPromptCausalLM(nn.Module):
         output_path.mkdir(parents=True, exist_ok=True)
         self.save_soft_prompt(output_path)
         if hasattr(self.base_model, "save_pretrained"):
+            kwargs["safe_serialization"] = False
             self.base_model.save_pretrained(output_path / "base_or_adapter", **kwargs)
 
 

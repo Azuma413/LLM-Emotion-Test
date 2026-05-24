@@ -51,6 +51,7 @@ def load_base_model(config: ExperimentConfig, *, apply_adapters: bool = True):
 
 
 def build_soft_prompt_model(config: ExperimentConfig) -> tuple[SoftPromptCausalLM, Any]:
+    require_cuda_if_configured(config)
     tokenizer = load_tokenizer(config)
     base_model = load_base_model(config)
     base_model.resize_token_embeddings(len(tokenizer))
@@ -71,11 +72,13 @@ def load_soft_prompt_model_from_checkpoint(
     checkpoint_dir: str | Path,
     config: ExperimentConfig,
 ) -> tuple[SoftPromptCausalLM, Any]:
+    require_cuda_if_configured(config)
     checkpoint_path = Path(checkpoint_dir)
     tokenizer = load_tokenizer(config)
     saved_model_path = checkpoint_path / "base_or_adapter"
     if (saved_model_path / "adapter_config.json").exists():
         base_model = load_base_model(config, apply_adapters=False)
+        base_model.resize_token_embeddings(len(tokenizer))
         base_model = PeftModel.from_pretrained(base_model, saved_model_path)
     elif saved_model_path.exists():
         base_model = load_saved_base_model(saved_model_path, config)
@@ -108,6 +111,11 @@ def resolve_torch_dtype(value: str) -> torch.dtype | None:
     if value == "bfloat16":
         return torch.bfloat16
     raise ValueError(f"Unsupported torch dtype: {value}")
+
+
+def require_cuda_if_configured(config: ExperimentConfig) -> None:
+    if config.runtime.require_gpu and not torch.cuda.is_available():
+        raise RuntimeError("This run requires a CUDA GPU, but torch.cuda.is_available() is false")
 
 
 def get_hidden_size(model) -> int:

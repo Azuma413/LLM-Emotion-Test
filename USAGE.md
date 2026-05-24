@@ -1,6 +1,6 @@
 # Usage
 
-このリポジトリの実験は、各フェーズを CLI から順に実行する。重い学習は GPU 前提だが、`tabular_smoke` と小さいサンプル設定では CPU だけでデータ形式、交渉環境、評価出力を確認できる。
+このリポジトリの実験は、各フェーズを CLI から順に実行する。標準 config は短いステップ数の GPU 実学習用で、`runtime.require_gpu: true` により CUDA GPU がない環境では失敗する。CPU だけで交渉環境や評価出力を確認したい場合は、RL の `rl_task.policy_backend` を `tabular_smoke` に変更する。
 
 ## 1. データ準備
 
@@ -24,6 +24,7 @@ uv run llm-emotion-test train-sft --config configs/sft.yaml
 ```
 
 入力 soft prompt と出力 latent marker を含む SFT を実行し、`outputs/runs/<run_id>/checkpoints/` に checkpoint を保存する。
+標準設定では `outputs/runs/sft-gpu/checkpoints/final` が後続の自己蒸留の初期モデルになる。
 
 ## 3. 自己蒸留
 
@@ -32,16 +33,17 @@ uv run llm-emotion-test distill --config configs/distill.yaml
 ```
 
 教師モデルの感情指示付き応答を生成またはキャッシュから再利用し、学生モデルを教師出力へ合わせて学習する。教師生成のキャッシュ、蒸留 JSONL、学生用 JSONL は run directory に保存される。
+`distillation.student_checkpoint_dir` に SFT の final checkpoint を指定すると、SFT 後のモデルを学生モデルとしてロードして蒸留する。標準設定では `outputs/runs/sft-gpu/checkpoints/final` から開始し、`outputs/runs/distill-gpu/checkpoints/final` を保存する。
 
 ## 4. GRPO / AT-GRPO
 
-CPU smoke run:
+GPU LLM run:
 
 ```bash
 uv run llm-emotion-test train-rl --config configs/rl_grpo.yaml
 ```
 
-`configs/rl_grpo.yaml` の `rl_task.policy_backend` を `tabular_smoke` にすると、LLM 推論なしで交渉環境、rollout buffer、turn-wise grouped advantage、checkpoint 保存を確認できる。`llm` の場合は soft prompt モデルを使って各 agent turn の候補を生成し、報酬で相対比較する。
+標準設定では `rl_task.policy_backend: llm` と `rl_task.resume_from_checkpoint: outputs/runs/distill-gpu/checkpoints/final` を使い、蒸留後の soft prompt モデルを AT-GRPO の初期 policy としてロードする。`configs/rl_grpo.yaml` の `rl_task.policy_backend` を `tabular_smoke` にすると、LLM 推論なしで交渉環境、rollout buffer、turn-wise grouped advantage、checkpoint 保存を確認できる。
 第三者回答器はデフォルトでは rule-based だが、`rl_task.third_party_backend: llm` にすると第三者 LLM が `<answer>1234</answer>` 形式の暫定回答を生成する。
 LLM 版 AT-GRPO は checkpoint directory 内の `rl_state.pt` に optimizer state と episode index を保存し、`rl_task.resume_from_checkpoint` で再開できる。
 
@@ -81,14 +83,18 @@ uv run llm-emotion-test evaluate --config configs/eval.yaml
 - `emotion_distribution.svg`
 - `evaluation_report.md`: 数値サマリ、transcript sample、失敗例
 
-## 6. 一括 smoke 確認
+## 6. 短時間 GPU パイプライン確認
 
 ```bash
 uv run pytest
 uv run llm-emotion-test prepare-data --config configs/sft.yaml
+uv run llm-emotion-test train-sft --config configs/sft.yaml
+uv run llm-emotion-test distill --config configs/distill.yaml
 uv run llm-emotion-test train-rl --config configs/rl_grpo.yaml
 uv run llm-emotion-test evaluate --config configs/eval.yaml
 ```
+
+この一括確認は smoke backend ではなく、SFT、SFT checkpoint からの Distill、Distill checkpoint からの LLM AT-GRPO を順に実行する。標準 config のステップ数とサンプル数は短時間確認用に小さくしている。
 
 ## 7. 対話サンプル
 

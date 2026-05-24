@@ -157,7 +157,7 @@ def run_train_rl(config_path: str | Path, console: Console) -> int:
     try:
         metrics = run_rule_based_rl_smoke(config)
     except Exception as exc:
-        console.print(f"[bold red]RL smoke run failed:[/bold red] {exc}")
+        console.print(f"[bold red]RL training failed:[/bold red] {exc}")
         return 1
 
     table = Table(title="train-rl summary")

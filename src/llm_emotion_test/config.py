@@ -123,6 +123,7 @@ class DistillationConfig(BaseModel):
     source_data_path: Path = Path("datasets/processed/sft-smoke.jsonl")
     teacher_cache_path: Path | None = None
     distill_data_path: Path | None = None
+    student_checkpoint_dir: Path | None = None
     overwrite_cache: bool = False
     require_teacher_latent_marker: bool = False
     max_teacher_output_chars: int = Field(default=1000, ge=1)
@@ -277,6 +278,7 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     device: str = "auto"
+    require_gpu: bool = False
     seed: int = 42
 
 

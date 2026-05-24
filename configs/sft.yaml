@@ -1,31 +1,41 @@
 experiment_name: llm-emotion-test-sft
 stage: sft
 model:
-  base_model: Qwen/Qwen3.5-2B
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  torch_dtype: bfloat16
+  device_map: auto
+  use_lora: true
+  lora_target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
 soft_prompt:
   num_latents: 8
   prompt_length: 4
 data:
   dataset_name: shunk031/wrime
   dataset_config: ver1
-  processed_filename: sft-smoke.jsonl
+  processed_filename: sft-gpu.jsonl
   text_column: sentence
   annotation_source: writer
-  max_samples: 100
+  max_samples: 32
 training:
   learning_rate: 0.00002
   batch_size: 1
   gradient_accumulation_steps: 1
-  max_steps: 10
+  max_steps: 2
   max_seq_length: 512
   precision: bf16
   logging_steps: 1
-  eval_steps: 5
-  save_steps: 10
+  eval_steps: 1
+  save_steps:
   eval_max_samples: 16
-  sample_count: 4
-  generation_max_new_tokens: 64
+  sample_count: 1
+  generation_max_new_tokens: 32
   report_to: none
 output:
   root: outputs/runs
-  run_id: sft-smoke
+  run_id: sft-gpu
+runtime:
+  require_gpu: true

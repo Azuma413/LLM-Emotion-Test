@@ -13,6 +13,8 @@ from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.distill import prepare_distillation_dataset
 from llm_emotion_test.models.loader import (
     build_soft_prompt_model,
+    load_soft_prompt_model_from_checkpoint,
+    require_cuda_if_configured,
     resolve_torch_dtype,
     save_model_checkpoint,
 )
@@ -94,6 +96,7 @@ class DistillationTrainer(Trainer):
 
 
 def train_distill(config: ExperimentConfig) -> dict[str, Any]:
+    require_cuda_if_configured(config)
     set_seed(config.runtime.seed)
     config.output.run_dir.mkdir(parents=True, exist_ok=True)
     config.output.checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +113,13 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
     if not eval_records:
         eval_records = train_records[: min(len(train_records), config.training.eval_max_samples)]
 
-    model, tokenizer = build_soft_prompt_model(config)
+    if config.distillation.student_checkpoint_dir is not None:
+        model, tokenizer = load_soft_prompt_model_from_checkpoint(
+            config.distillation.student_checkpoint_dir,
+            config,
+        )
+    else:
+        model, tokenizer = build_soft_prompt_model(config)
     collator = EmotionSFTDataCollator(
         tokenizer=tokenizer,
         max_seq_length=config.training.max_seq_length,

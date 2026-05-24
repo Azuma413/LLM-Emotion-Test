@@ -1,10 +1,12 @@
 experiment_name: llm-emotion-test-eval
 stage: eval
 model:
-  base_model: Qwen/Qwen3.5-2B
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  torch_dtype: bfloat16
+  device_map: auto
 data:
   processed_dir: datasets/processed
-  max_samples: 100
+  max_samples: 32
 training:
   report_to: none
 rl_task:
@@ -23,13 +25,13 @@ rl_task:
 evaluation:
   num_tasks: 4
   task_seed_offset: 50000
-  source_run_dir: outputs/runs/rl-grpo-smoke
+  source_run_dir: outputs/runs/rl-grpo-gpu
   model_variant_backend: auto
-  sft_model_checkpoint_dir: outputs/runs/sft-smoke/checkpoints/final
-  distilled_model_checkpoint_dir: outputs/runs/distill-smoke/checkpoints/final
-  rl_model_checkpoint_dir: outputs/runs/rl-grpo-smoke/checkpoints/final
+  sft_model_checkpoint_dir: outputs/runs/sft-gpu/checkpoints/final
+  distilled_model_checkpoint_dir: outputs/runs/distill-gpu/checkpoints/final
+  rl_model_checkpoint_dir: outputs/runs/rl-grpo-gpu/checkpoints/final
   transcript_sample_count: 3
   failure_sample_count: 3
 output:
   root: outputs/runs
-  run_id: eval-smoke
+  run_id: eval-gpu
