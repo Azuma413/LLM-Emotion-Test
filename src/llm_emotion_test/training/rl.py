@@ -194,6 +194,7 @@ def train_at_grpo_llm(config: ExperimentConfig) -> dict[str, Any]:
         lr=config.training.learning_rate,
         weight_decay=config.training.weight_decay,
     )
+    start_episode = load_llm_rl_state(config, optimizer)
 
     baseline_metrics = evaluate_llm_policy(config, model, tokenizer, seed_offset=10_000)
     fixed_baseline_metrics = evaluate_fixed_baseline(config, seed_offset=30_000)
@@ -201,7 +202,6 @@ def train_at_grpo_llm(config: ExperimentConfig) -> dict[str, Any]:
     buffer = RolloutBuffer()
     losses: list[float] = []
 
-    start_episode = 0
     for episode_index in range(start_episode, config.rl_task.num_episodes):
         if episode_index >= config.training.max_steps:
             break
@@ -223,12 +223,13 @@ def train_at_grpo_llm(config: ExperimentConfig) -> dict[str, Any]:
         losses.append(loss)
         buffer.extend(steps)
         all_transcripts.append(rollout["transcript"])
-        save_model_checkpoint(
+        episode_checkpoint = save_model_checkpoint(
             model,
             tokenizer,
             config,
             config.output.checkpoints_dir / f"episode-{episode_index + 1:06d}",
         )
+        save_llm_rl_state(episode_checkpoint, optimizer, episode_index=episode_index + 1)
 
     final_checkpoint = save_model_checkpoint(
         model,
@@ -236,6 +237,7 @@ def train_at_grpo_llm(config: ExperimentConfig) -> dict[str, Any]:
         config,
         config.output.checkpoints_dir / "final",
     )
+    save_llm_rl_state(final_checkpoint, optimizer, episode_index=len(all_transcripts) + start_episode)
     transcript_path = config.output.run_dir / config.rl_task.transcript_filename
     write_transcripts(all_transcripts, transcript_path)
     rollout_buffer_path = config.output.run_dir / "rollout_buffer.jsonl"
@@ -363,6 +365,37 @@ def load_or_create_rl_model(config: ExperimentConfig):
     model, tokenizer = build_soft_prompt_model(config)
     model.soft_prompt.to(model_device(model))
     return model, tokenizer
+
+
+def load_llm_rl_state(config: ExperimentConfig, optimizer: torch.optim.Optimizer) -> int:
+    checkpoint_path = config.rl_task.resume_from_checkpoint
+    if checkpoint_path is None or not checkpoint_path.exists() or not checkpoint_path.is_dir():
+        return 0
+    state_path = checkpoint_path / "rl_state.pt"
+    if not state_path.exists():
+        return 0
+    state = torch.load(state_path, map_location="cpu")
+    optimizer_state = state.get("optimizer")
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
+    return int(state.get("episode_index", 0))
+
+
+def save_llm_rl_state(
+    checkpoint_dir: str | Path,
+    optimizer: torch.optim.Optimizer,
+    *,
+    episode_index: int,
+) -> Path:
+    path = Path(checkpoint_dir) / "rl_state.pt"
+    torch.save(
+        {
+            "episode_index": episode_index,
+            "optimizer": optimizer.state_dict(),
+        },
+        path,
+    )
+    return path
 
 
 def configure_rl_trainable_parameters(model, config: ExperimentConfig) -> None:

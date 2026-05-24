@@ -3,13 +3,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import torch
 import yaml
+from torch.nn import functional as F
 from torch.utils.data import Dataset
-from transformers import Trainer, set_seed
+from transformers import AutoModelForCausalLM, Trainer, set_seed
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.distill import prepare_distillation_dataset
-from llm_emotion_test.models.loader import build_soft_prompt_model, save_model_checkpoint
+from llm_emotion_test.models.loader import (
+    build_soft_prompt_model,
+    resolve_torch_dtype,
+    save_model_checkpoint,
+)
 from llm_emotion_test.training.sft import (
     EmotionSFTDataCollator,
     build_training_arguments,
@@ -41,6 +47,52 @@ class DistillationStudentDataset(Dataset):
         }
 
 
+class DistillationTrainer(Trainer):
+    def __init__(self, *args, teacher_model=None, kl_weight: float = 0.0, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.teacher_model = teacher_model
+        self.kl_weight = kl_weight
+        if self.teacher_model is not None:
+            self.teacher_model.eval()
+            for parameter in self.teacher_model.parameters():
+                parameter.requires_grad = False
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        outputs = model(**inputs)
+        loss = outputs.loss
+        if self.teacher_model is not None and self.kl_weight > 0.0:
+            loss = loss + self.kl_weight * self._kl_loss(model, outputs, inputs)
+        return (loss, outputs) if return_outputs else loss
+
+    def _kl_loss(self, model, student_outputs, inputs) -> torch.Tensor:
+        teacher_inputs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs.get("attention_mask"),
+        }
+        teacher_device = next(self.teacher_model.parameters()).device
+        teacher_inputs = {
+            key: value.to(teacher_device) if value is not None else None
+            for key, value in teacher_inputs.items()
+        }
+        teacher_inputs = {key: value for key, value in teacher_inputs.items() if value is not None}
+        with torch.no_grad():
+            teacher_outputs = self.teacher_model(**teacher_inputs)
+
+        prompt_length = getattr(model.soft_prompt, "prompt_length", 0)
+        student_logits = student_outputs.logits[:, prompt_length:, :]
+        teacher_logits = teacher_outputs.logits.to(student_logits.device)
+        labels = inputs["labels"].to(student_logits.device)
+        mask = labels != -100
+        if not torch.any(mask):
+            return torch.zeros((), dtype=student_logits.dtype, device=student_logits.device)
+
+        vocab_size = min(student_logits.shape[-1], teacher_logits.shape[-1])
+        student_log_probs = F.log_softmax(student_logits[..., :vocab_size], dim=-1)
+        teacher_probs = F.softmax(teacher_logits[..., :vocab_size], dim=-1)
+        token_kl = F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1)
+        return token_kl[mask].mean()
+
+
 def train_distill(config: ExperimentConfig) -> dict[str, Any]:
     set_seed(config.runtime.seed)
     config.output.run_dir.mkdir(parents=True, exist_ok=True)
@@ -63,12 +115,17 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
         tokenizer=tokenizer,
         max_seq_length=config.training.max_seq_length,
     )
-    trainer = Trainer(
+    teacher_model = build_kl_teacher_model(config, tokenizer) if (
+        config.distillation.kl_divergence_weight > 0.0
+    ) else None
+    trainer = DistillationTrainer(
         model=model,
         args=build_training_arguments(config),
         train_dataset=DistillationStudentDataset(train_records),
         eval_dataset=DistillationStudentDataset(eval_records),
         data_collator=collator,
+        teacher_model=teacher_model,
+        kl_weight=config.distillation.kl_divergence_weight,
     )
     train_result = trainer.train()
     eval_metrics = trainer.evaluate()
@@ -97,3 +154,20 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
     }
     write_jsonl([metrics], config.output.metrics_path)
     return metrics
+
+
+def build_kl_teacher_model(config: ExperimentConfig, tokenizer):
+    kwargs: dict[str, Any] = {
+        "trust_remote_code": config.distillation.teacher_trust_remote_code,
+    }
+    if config.distillation.teacher_device_map is not None:
+        kwargs["device_map"] = config.distillation.teacher_device_map
+    dtype = resolve_torch_dtype(config.distillation.teacher_torch_dtype)
+    if dtype is not None:
+        kwargs["torch_dtype"] = dtype
+    teacher = AutoModelForCausalLM.from_pretrained(
+        config.distillation.teacher_model,
+        **kwargs,
+    )
+    teacher.resize_token_embeddings(len(tokenizer))
+    return teacher

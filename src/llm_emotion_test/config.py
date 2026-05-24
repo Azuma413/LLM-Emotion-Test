@@ -14,7 +14,7 @@ class ConfigError(ValueError):
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    base_model: str = "Qwen/Qwen3.5-2B"
     tokenizer: str | None = None
     trust_remote_code: bool = True
     torch_dtype: Literal["auto", "float32", "float16", "bfloat16"] = "auto"
@@ -60,6 +60,7 @@ class DataConfig(BaseModel):
     raw_dir: Path = Path("datasets/raw")
     processed_dir: Path = Path("datasets/processed")
     processed_filename: str = "sft.jsonl"
+    summary_filename: str = "data_summary.json"
     text_column: str = "sentence"
     annotation_source: Literal["writer", "reader1", "reader2", "reader3", "avg_readers"] = (
         "writer"
@@ -156,6 +157,15 @@ class RLTaskConfig(BaseModel):
     checkpoint_filename: str = "rl_checkpoint.json"
     resume_from_checkpoint: Path | None = None
     transcript_filename: str = "rl_transcripts.jsonl"
+    third_party_backend: Literal["rule_based", "llm"] = "rule_based"
+    third_party_model: str = "Qwen/Qwen3.5-2B"
+    third_party_tokenizer: str | None = None
+    third_party_trust_remote_code: bool = True
+    third_party_torch_dtype: Literal["auto", "float32", "float16", "bfloat16"] = "auto"
+    third_party_device_map: str | dict[str, Any] | None = "auto"
+    third_party_max_new_tokens: int = Field(default=32, ge=1)
+    third_party_temperature: float = Field(default=0.0, ge=0.0)
+    third_party_top_p: float = Field(default=1.0, gt=0.0, le=1.0)
     allowed_constraint_types: list[str] = Field(
         default_factory=lambda: [
             "parity",
@@ -220,6 +230,11 @@ class EvaluationConfig(BaseModel):
         ]
     )
     source_run_dir: Path | None = None
+    model_variant_backend: Literal["auto", "surrogate", "llm"] = "auto"
+    base_model_checkpoint_dir: Path | None = None
+    sft_model_checkpoint_dir: Path | None = None
+    distilled_model_checkpoint_dir: Path | None = None
+    rl_model_checkpoint_dir: Path | None = None
     transcript_sample_count: int = Field(default=3, ge=0)
     failure_sample_count: int = Field(default=3, ge=0)
     metrics_csv_filename: str = "evaluation_metrics.csv"

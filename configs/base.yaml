@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test
 stage: base
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
   tokenizer: null
   trust_remote_code: true
 soft_prompt:
@@ -15,6 +15,7 @@ data:
   raw_dir: datasets/raw
   processed_dir: datasets/processed
   processed_filename: sft.jsonl
+  summary_filename: data_summary.json
   text_column: sentence
   annotation_source: writer
   emotion_labels:

@@ -11,8 +11,16 @@ from typing import Any
 
 import yaml
 
-from llm_emotion_test.agents.negotiation import AgentAction, RuleBasedConstraintSharingAgent
+from llm_emotion_test.agents.negotiation import (
+    AgentAction,
+    LLMNegotiationAgent,
+    RuleBasedConstraintSharingAgent,
+)
 from llm_emotion_test.config import ExperimentConfig
+from llm_emotion_test.models.loader import (
+    build_soft_prompt_model,
+    load_soft_prompt_model_from_checkpoint,
+)
 from llm_emotion_test.tasks.negotiation_env import CooperativeHiddenConstraintsEnv, write_transcripts
 from llm_emotion_test.training.rl import (
     TabularLatentPolicy,
@@ -110,6 +118,7 @@ def run_evaluation(config: ExperimentConfig) -> dict[str, Any]:
     all_transcripts: list[dict[str, Any]] = []
     comparison_records: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
+    model_cache: dict[str, tuple[Any, Any]] = {}
     seeds = [
         config.runtime.seed + config.evaluation.task_seed_offset + index
         for index in range(config.evaluation.num_tasks)
@@ -122,6 +131,7 @@ def run_evaluation(config: ExperimentConfig) -> dict[str, Any]:
                 variant=variant,
                 episode_index=index,
                 problem_seed=seed,
+                model_cache=model_cache,
             )
             for index, seed in enumerate(seeds)
         ]
@@ -180,7 +190,26 @@ def run_variant_episode(
     variant: str,
     episode_index: int,
     problem_seed: int,
+    model_cache: dict[str, tuple[Any, Any]] | None = None,
 ) -> dict[str, Any]:
+    model_cache = model_cache if model_cache is not None else {}
+    llm_agents = build_llm_variant_agents(
+        config,
+        variant=variant,
+        model_cache=model_cache,
+    )
+    if llm_agents is not None:
+        env = CooperativeHiddenConstraintsEnv(config)
+        env.reset(seed=problem_seed)
+        while not env.is_done:
+            agent_id = env._require_state().active_agent_id
+            env.step(llm_agents[agent_id].act(env.observe(agent_id)))
+        transcript = env.transcript_record()
+        transcript["episode_index"] = episode_index
+        transcript["variant"] = variant
+        transcript["policy_source"] = "llm_checkpoint"
+        return transcript
+
     if variant == "rl_model":
         policy = load_evaluation_policy(config, rng=random.Random(problem_seed))
         if policy is not None:
@@ -207,6 +236,60 @@ def run_variant_episode(
     transcript["variant"] = variant
     transcript["policy_source"] = "rule_based_surrogate"
     return transcript
+
+
+def build_llm_variant_agents(
+    config: ExperimentConfig,
+    *,
+    variant: str,
+    model_cache: dict[str, tuple[Any, Any]],
+) -> dict[str, LLMNegotiationAgent] | None:
+    checkpoint_dir = checkpoint_dir_for_variant(config, variant)
+    if config.evaluation.model_variant_backend == "surrogate":
+        return None
+    if checkpoint_dir is None:
+        if not (variant == "base_model" and config.evaluation.model_variant_backend == "llm"):
+            return None
+    elif not checkpoint_dir.exists():
+        if config.evaluation.model_variant_backend == "llm":
+            raise FileNotFoundError(f"Checkpoint for {variant} does not exist: {checkpoint_dir}")
+        return None
+
+    cache_key = f"{variant}:{checkpoint_dir or config.model.base_model}"
+    if cache_key not in model_cache:
+        if checkpoint_dir is None:
+            model_cache[cache_key] = build_soft_prompt_model(config)
+        else:
+            model_cache[cache_key] = load_soft_prompt_model_from_checkpoint(
+                checkpoint_dir,
+                config,
+            )
+    model, tokenizer = model_cache[cache_key]
+    return {
+        agent_id: LLMNegotiationAgent(
+            model,
+            tokenizer,
+            agent_id=agent_id,
+            num_latents=config.soft_prompt.num_latents,
+            marker_template=config.soft_prompt.latent_marker_template,
+            generation_max_new_tokens=config.training.generation_max_new_tokens,
+            fallback=config.soft_prompt.invalid_latent_fallback,
+            neutral_latent_id=config.soft_prompt.neutral_latent_id,
+        )
+        for agent_id in ("A", "B")
+    }
+
+
+def checkpoint_dir_for_variant(config: ExperimentConfig, variant: str) -> Path | None:
+    if variant == "base_model":
+        return config.evaluation.base_model_checkpoint_dir
+    if variant == "sft_model":
+        return config.evaluation.sft_model_checkpoint_dir
+    if variant == "distilled_model":
+        return config.evaluation.distilled_model_checkpoint_dir
+    if variant == "rl_model":
+        return config.evaluation.rl_model_checkpoint_dir
+    return None
 
 
 def load_evaluation_policy(

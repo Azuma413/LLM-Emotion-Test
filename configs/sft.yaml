@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test-sft
 stage: sft
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
 soft_prompt:
   num_latents: 8
   prompt_length: 4

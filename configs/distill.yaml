@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test-distill
 stage: distill
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
 data:
   processed_dir: datasets/distill
   processed_filename: student-sft.jsonl

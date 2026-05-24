@@ -8,8 +8,13 @@ from rich.console import Console
 from rich.table import Table
 
 from llm_emotion_test.config import ConfigError, config_summary, load_config
-from llm_emotion_test.data.wrime import prepare_wrime_dataset
+from llm_emotion_test.agents.negotiation import RuleBasedConstraintSharingAgent
+from llm_emotion_test.data.wrime import prepare_wrime_dataset, summarize_prepared_dataset
 from llm_emotion_test.evaluation.evaluator import run_evaluation
+from llm_emotion_test.tasks.negotiation_env import (
+    CooperativeHiddenConstraintsEnv,
+    write_transcripts,
+)
 from llm_emotion_test.training.distill import train_distill
 from llm_emotion_test.training.rl import run_rule_based_rl_smoke
 from llm_emotion_test.training.sft import train_sft
@@ -17,6 +22,7 @@ from llm_emotion_test.training.sft import train_sft
 
 COMMANDS = {
     "prepare-data": "Load and validate data preparation settings.",
+    "summarize-data": "Summarize a prepared JSONL dataset.",
     "train-sft": "Load and validate SFT training settings.",
     "distill": "Load and validate distillation settings.",
     "train-rl": "Load and validate GRPO training settings.",
@@ -52,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
 def run_command(command: str, config_path: str | Path, console: Console) -> int:
     if command == "prepare-data":
         return run_prepare_data(config_path, console)
+    if command == "summarize-data":
+        return run_summarize_data(config_path, console)
     if command == "train-sft":
         return run_train_sft(config_path, console)
     if command == "distill":
@@ -60,6 +68,8 @@ def run_command(command: str, config_path: str | Path, console: Console) -> int:
         return run_train_rl(config_path, console)
     if command == "evaluate":
         return run_evaluate(config_path, console)
+    if command == "sample-dialogue":
+        return run_sample_dialogue(config_path, console)
 
     try:
         config = load_config(config_path)
@@ -231,6 +241,79 @@ def run_prepare_data(config_path: str | Path, console: Console) -> int:
             table.add_row(str(value), str(count))
         console.print(table)
 
+    return 0
+
+
+def run_summarize_data(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        stats = summarize_prepared_dataset(config)
+    except Exception as exc:
+        console.print(f"[bold red]Data summary failed:[/bold red] {exc}")
+        return 1
+
+    summary = Table(title="summarize-data summary")
+    summary.add_column("Key", style="cyan")
+    summary.add_column("Value")
+    summary.add_row("input_path", str(stats["input_path"]))
+    summary.add_row("summary_path", str(stats["summary_path"]))
+    summary.add_row("num_samples", str(stats["num_samples"]))
+    summary.add_row("text_length", str(stats["text_length"]))
+    console.print(summary)
+
+    for key in (
+        "split_counts",
+        "label_counts",
+        "input_latent_counts",
+        "target_latent_counts",
+    ):
+        table = Table(title=key)
+        table.add_column("Value", style="cyan")
+        table.add_column("Count")
+        for value, count in stats[key].items():
+            table.add_row(str(value), str(count))
+        console.print(table)
+    return 0
+
+
+def run_sample_dialogue(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        env = CooperativeHiddenConstraintsEnv(config)
+        env.reset(seed=config.runtime.seed)
+        agents = {
+            agent_id: RuleBasedConstraintSharingAgent(latent_id=0)
+            for agent_id in CooperativeHiddenConstraintsEnv.agent_ids
+        }
+        while not env.is_done:
+            agent_id = env._require_state().active_agent_id
+            env.step(agents[agent_id].act(env.observe(agent_id)))
+        transcript = env.transcript_record()
+        transcript["episode_index"] = 0
+        transcript_path = config.output.run_dir / "sample_dialogue.jsonl"
+        write_transcripts([transcript], transcript_path)
+    except Exception as exc:
+        console.print(f"[bold red]Dialogue sampling failed:[/bold red] {exc}")
+        return 1
+
+    table = Table(title="sample-dialogue summary")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("transcript_path", str(transcript_path))
+    table.add_row("success", str(transcript["success"]))
+    table.add_row("total_reward", str(transcript["total_reward"]))
+    table.add_row("answer", str(transcript["task"]["answer"]))
+    console.print(table)
     return 0
 
 

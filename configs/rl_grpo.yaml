@@ -1,7 +1,7 @@
 experiment_name: llm-emotion-test-rl-grpo
 stage: rl_grpo
 model:
-  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  base_model: Qwen/Qwen3.5-2B
   torch_dtype: float16
   use_lora: true
   lora_target_modules:
@@ -30,6 +30,7 @@ rl_task:
   sampling_temperature: 1.0
   sampling_top_p: 1.0
   transcript_filename: rl_transcripts.jsonl
+  third_party_backend: rule_based
 output:
   root: outputs/runs
   run_id: rl-grpo-smoke

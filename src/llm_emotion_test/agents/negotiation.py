@@ -142,6 +142,61 @@ class RuleBasedThirdPartyAnswerer:
         return None
 
 
+class LLMThirdPartyAnswerer:
+    def __init__(self, config) -> None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        from llm_emotion_test.models.loader import resolve_torch_dtype
+
+        tokenizer_id = config.rl_task.third_party_tokenizer or config.rl_task.third_party_model
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_id,
+            trust_remote_code=config.rl_task.third_party_trust_remote_code,
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        kwargs: dict[str, Any] = {
+            "trust_remote_code": config.rl_task.third_party_trust_remote_code,
+        }
+        if config.rl_task.third_party_device_map is not None:
+            kwargs["device_map"] = config.rl_task.third_party_device_map
+        dtype = resolve_torch_dtype(config.rl_task.third_party_torch_dtype)
+        if dtype is not None:
+            kwargs["torch_dtype"] = dtype
+        self.model = AutoModelForCausalLM.from_pretrained(
+            config.rl_task.third_party_model,
+            **kwargs,
+        )
+        self.config = config
+
+    def answer(
+        self,
+        *,
+        problem: HiddenConstraintProblem,
+        transcript: Sequence[Mapping[str, Any]],
+    ) -> str | None:
+        import torch
+
+        prompt = build_third_party_prompt(problem, transcript)
+        encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+        device = next(self.model.parameters()).device
+        encoded = {key: value.to(device) for key, value in encoded.items()}
+        do_sample = self.config.rl_task.third_party_temperature > 0.0
+        kwargs: dict[str, Any] = {
+            "max_new_tokens": self.config.rl_task.third_party_max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": self.tokenizer.pad_token_id,
+        }
+        if do_sample:
+            kwargs["temperature"] = self.config.rl_task.third_party_temperature
+            kwargs["top_p"] = self.config.rl_task.third_party_top_p
+        with torch.no_grad():
+            output_ids = self.model.generate(**encoded, **kwargs)
+        decoded = self.tokenizer.decode(output_ids[0], skip_special_tokens=False)
+        generated = decoded[len(prompt) :] if decoded.startswith(prompt) else decoded
+        return parse_answer(generated)
+
+
 def build_agent_prompt(observation: Mapping[str, Any]) -> str:
     lines = [
         "あなたは協調コード推定タスクのエージェントです。",
@@ -159,6 +214,22 @@ def build_agent_prompt(observation: Mapping[str, Any]) -> str:
             "最後に必ず <|emotion|>000<|/emotion|> の形式で latent を出力してください。",
         ]
     )
+    return "\n".join(lines)
+
+
+def build_third_party_prompt(
+    problem: HiddenConstraintProblem,
+    transcript: Sequence[Mapping[str, Any]],
+) -> str:
+    lines = [
+        "あなたは協調コード推定タスクの第三者評価器です。",
+        "会話履歴だけを使って、現時点で推定できるコードを1つ出力してください。",
+        f"コードは{len(problem.code)}桁で、形式は必ず <answer>1234</answer> です。",
+        "会話履歴:",
+    ]
+    for item in transcript:
+        lines.append(f"Agent {item['agent_id']}: {item['action']['message_text']}")
+    lines.append("暫定回答:")
     return "\n".join(lines)
 
 

@@ -119,7 +119,36 @@ def prepare_wrime_dataset(config: ExperimentConfig) -> dict[str, Any]:
     stats = summarize_records(records)
     stats["output_path"] = str(output_path)
     stats["label_to_id"] = label_to_id
+    summary_path = config.data.processed_dir / config.data.summary_filename
+    summary_path.write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    stats["summary_path"] = str(summary_path)
     return stats
+
+
+def summarize_prepared_dataset(config: ExperimentConfig) -> dict[str, Any]:
+    records = load_prepared_jsonl(config.data.processed_path)
+    stats = summarize_records(records)
+    stats["input_path"] = str(config.data.processed_path)
+    summary_path = config.data.processed_dir / config.data.summary_filename
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    stats["summary_path"] = str(summary_path)
+    return stats
+
+
+def load_prepared_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with Path(path).open(encoding="utf-8") as file:
+        for line in file:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
 
 
 def build_label_to_id(

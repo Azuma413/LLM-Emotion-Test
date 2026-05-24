@@ -8,6 +8,7 @@ from typing import Any
 
 from llm_emotion_test.agents.negotiation import (
     AgentAction,
+    LLMThirdPartyAnswerer,
     RuleBasedThirdPartyAnswerer,
 )
 from llm_emotion_test.config import ExperimentConfig
@@ -33,10 +34,13 @@ class CooperativeHiddenConstraintsEnv:
 
     def __init__(self, config: ExperimentConfig) -> None:
         self.config = config
-        self.answerer = RuleBasedThirdPartyAnswerer(
-            digits=config.rl_task.digits,
-            allow_repeats=config.rl_task.allow_repeats,
-        )
+        if config.rl_task.third_party_backend == "llm":
+            self.answerer = LLMThirdPartyAnswerer(config)
+        else:
+            self.answerer = RuleBasedThirdPartyAnswerer(
+                digits=config.rl_task.digits,
+                allow_repeats=config.rl_task.allow_repeats,
+            )
         self.state: NegotiationState | None = None
 
     def reset(self, seed: int | None = None) -> Mapping[str, Any]:
