@@ -186,6 +186,13 @@ class SoftPromptCausalLM(nn.Module):
         )
         return output_path
 
+    def save_pretrained(self, output_dir: str | Path, **kwargs: Any) -> None:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        self.save_soft_prompt(output_path)
+        if hasattr(self.base_model, "save_pretrained"):
+            self.base_model.save_pretrained(output_path / "base_or_adapter", **kwargs)
+
 
 def load_soft_prompt(checkpoint_path: str | Path) -> SoftPromptEmbedding:
     payload = torch.load(checkpoint_path, map_location="cpu")

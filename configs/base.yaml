@@ -35,7 +35,17 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 1
   max_steps: 10
+  max_seq_length: 512
   precision: bf16
+  logging_steps: 1
+  eval_steps: null
+  save_steps: null
+  warmup_steps: 0
+  weight_decay: 0.0
+  num_train_epochs: 1.0
+  eval_max_samples: 16
+  sample_count: 4
+  generation_max_new_tokens: 64
   report_to: wandb
 output:
   root: outputs/runs

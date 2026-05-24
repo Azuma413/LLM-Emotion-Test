@@ -93,7 +93,17 @@ class TrainingConfig(BaseModel):
     batch_size: int = Field(default=1, ge=1)
     gradient_accumulation_steps: int = Field(default=1, ge=1)
     max_steps: int = Field(default=10, ge=1)
+    max_seq_length: int = Field(default=512, ge=8)
     precision: Literal["fp32", "fp16", "bf16"] = "bf16"
+    logging_steps: int = Field(default=1, ge=1)
+    eval_steps: int | None = Field(default=None, ge=1)
+    save_steps: int | None = Field(default=None, ge=1)
+    warmup_steps: int = Field(default=0, ge=0)
+    weight_decay: float = Field(default=0.0, ge=0.0)
+    num_train_epochs: float = Field(default=1.0, gt=0.0)
+    eval_max_samples: int = Field(default=16, ge=1)
+    sample_count: int = Field(default=4, ge=0)
+    generation_max_new_tokens: int = Field(default=64, ge=1)
     report_to: Literal["wandb", "tensorboard", "none"] = "wandb"
 
 

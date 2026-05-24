@@ -9,6 +9,7 @@ from rich.table import Table
 
 from llm_emotion_test.config import ConfigError, config_summary, load_config
 from llm_emotion_test.data.wrime import prepare_wrime_dataset
+from llm_emotion_test.training.sft import train_sft
 
 
 COMMANDS = {
@@ -48,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
 def run_command(command: str, config_path: str | Path, console: Console) -> int:
     if command == "prepare-data":
         return run_prepare_data(config_path, console)
+    if command == "train-sft":
+        return run_train_sft(config_path, console)
 
     try:
         config = load_config(config_path)
@@ -65,6 +68,32 @@ def run_command(command: str, config_path: str | Path, console: Console) -> int:
     console.print(
         "[yellow]Pipeline implementation for this command starts in the next phase.[/yellow]"
     )
+    return 0
+
+
+def run_train_sft(config_path: str | Path, console: Console) -> int:
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        return 2
+
+    try:
+        metrics = train_sft(config)
+    except Exception as exc:
+        console.print(f"[bold red]SFT training failed:[/bold red] {exc}")
+        return 1
+
+    table = Table(title="train-sft summary")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("final_checkpoint", str(metrics["final_checkpoint"]))
+    table.add_row("eval_loss", str(metrics["eval"].get("eval_loss")))
+    table.add_row(
+        "sample_latent_marker_accuracy",
+        str(metrics["sample_latent_marker_accuracy"]),
+    )
+    console.print(table)
     return 0
 
 

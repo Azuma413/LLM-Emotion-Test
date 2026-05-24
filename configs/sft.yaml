@@ -15,8 +15,17 @@ data:
 training:
   learning_rate: 0.00002
   batch_size: 1
+  gradient_accumulation_steps: 1
   max_steps: 10
-  report_to: wandb
+  max_seq_length: 512
+  precision: bf16
+  logging_steps: 1
+  eval_steps: 5
+  save_steps: 10
+  eval_max_samples: 16
+  sample_count: 4
+  generation_max_new_tokens: 64
+  report_to: none
 output:
   root: outputs/runs
   run_id: sft-smoke
