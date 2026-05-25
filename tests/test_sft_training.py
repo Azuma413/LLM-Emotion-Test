@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from torch import nn
+from transformers import TrainingArguments
+
 from llm_emotion_test.training.sft import (
     EmotionSFTDataCollator,
     EmotionSFTDataset,
+    LatentLossLoggingTrainer,
     build_training_arguments,
     build_sft_prompt,
     latent_marker_accuracy,
@@ -22,6 +26,22 @@ class TinyTokenizer:
         if token == "<|latent_pred|>":
             return 999
         return self.unk_token_id
+
+    def save_pretrained(self, output_dir):
+        return None
+
+
+class SharedWeightModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(4, 3)
+        self.head = nn.Linear(3, 4, bias=False)
+        self.head.weight = self.embedding.weight
+
+    def forward(self, input_ids=None, **_kwargs):
+        hidden = self.embedding(input_ids)
+        logits = self.head(hidden)
+        return {"loss": logits.sum() * 0, "logits": logits}
 
 
 def test_sft_dataset_builds_prompt_and_target() -> None:
@@ -109,3 +129,17 @@ def test_training_arguments_use_regular_ddp_graph() -> None:
 
     assert args.ddp_find_unused_parameters is False
     assert args.ddp_static_graph is False
+
+
+def test_trainer_checkpoint_save_allows_tied_weights(tmp_path) -> None:
+    trainer = LatentLossLoggingTrainer(
+        model=SharedWeightModel(),
+        args=TrainingArguments(output_dir=str(tmp_path), report_to=[]),
+        data_collator=EmotionSFTDataCollator(TinyTokenizer(), max_seq_length=16),
+    )
+
+    checkpoint_dir = tmp_path / "checkpoint-1"
+    trainer._save(str(checkpoint_dir))
+
+    assert (checkpoint_dir / "pytorch_model.bin").exists()
+    assert not (checkpoint_dir / "model.safetensors").exists()

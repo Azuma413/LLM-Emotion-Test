@@ -10,11 +10,13 @@ import torch
 import yaml
 from torch.utils.data import Dataset
 from transformers import Trainer, TrainingArguments, set_seed
+from transformers.trainer import TRAINING_ARGS_NAME, WEIGHTS_NAME
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.wrime import prepare_wrime_dataset
 from llm_emotion_test.models.latent import LatentMarkerSpec, strip_terminal_latent_marker
 from llm_emotion_test.models.loader import build_soft_prompt_model, save_model_checkpoint
+from llm_emotion_test.models.soft_prompt import SoftPromptCausalLM
 
 
 def load_sft_records(path: str | Path, *, split: str | None = None) -> list[dict[str, Any]]:
@@ -232,6 +234,33 @@ class LatentLossLoggingTrainer(Trainer):
         if self.last_latent_loss is not None:
             logs["latent_loss"] = self.last_latent_loss
         super().log(logs, *args, **kwargs)
+
+    def _save(self, output_dir: str | None = None, state_dict: dict | None = None) -> None:
+        unwrapped_model = self.accelerator.unwrap_model(
+            self.model,
+            keep_torch_compile=False,
+        )
+        if not isinstance(unwrapped_model, SoftPromptCausalLM):
+            output_path = Path(output_dir if output_dir is not None else self.args.output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            if state_dict is None:
+                state_dict = self.model.state_dict()
+            torch.save(state_dict, output_path / WEIGHTS_NAME)
+            if self.processing_class is not None:
+                self.processing_class.save_pretrained(output_path)
+            elif self.data_collator is not None and getattr(self.data_collator, "tokenizer", None):
+                self.data_collator.tokenizer.save_pretrained(output_path)
+            torch.save(self.args, output_path / TRAINING_ARGS_NAME)
+            return
+
+        output_path = Path(output_dir if output_dir is not None else self.args.output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        unwrapped_model.save_pretrained(output_path)
+        if self.processing_class is not None:
+            self.processing_class.save_pretrained(output_path)
+        elif self.data_collator is not None and getattr(self.data_collator, "tokenizer", None):
+            self.data_collator.tokenizer.save_pretrained(output_path)
+        torch.save(self.args, output_path / TRAINING_ARGS_NAME)
 
 
 def train_sft(config: ExperimentConfig) -> dict[str, Any]:

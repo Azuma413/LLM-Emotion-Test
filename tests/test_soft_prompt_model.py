@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from torch import nn
+from transformers import TrainingArguments
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from llm_emotion_test.models.latent import LatentMarkerSpec, parse_latent_id
@@ -14,6 +15,7 @@ from llm_emotion_test.models.soft_prompt import (
     SoftPromptEmbedding,
     load_soft_prompt,
 )
+from llm_emotion_test.training.sft import LatentLossLoggingTrainer
 
 
 class DummyCausalLM(nn.Module):
@@ -57,7 +59,7 @@ class DummyCausalLM(nn.Module):
         self.last_inputs_embeds_shape = tuple(inputs_embeds.shape)
         return torch.zeros(inputs_embeds.shape[0], 2, dtype=torch.long)
 
-    def save_pretrained(self, output_dir):
+    def save_pretrained(self, output_dir, **_kwargs):
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         (Path(output_dir) / "dummy.txt").write_text("saved", encoding="utf-8")
 
@@ -213,3 +215,24 @@ def test_latent_head_checkpoint_roundtrip(tmp_path: Path) -> None:
     assert restored.load_latent_head(checkpoint) is True
 
     assert torch.equal(restored.latent_head.weight, model.latent_head.weight)
+
+
+def test_sft_trainer_checkpoint_uses_soft_prompt_format(tmp_path: Path) -> None:
+    soft_prompt = SoftPromptEmbedding(
+        num_latents=2,
+        prompt_length=3,
+        hidden_size=5,
+        init_strategy="normal",
+    )
+    model = SoftPromptCausalLM(DummyCausalLM(hidden_size=5), soft_prompt)
+    args = TrainingArguments(output_dir=str(tmp_path), report_to=[])
+    trainer = LatentLossLoggingTrainer(model=model, args=args)
+
+    checkpoint_dir = tmp_path / "checkpoint-500"
+    trainer._save(str(checkpoint_dir))
+
+    assert (checkpoint_dir / "soft_prompt.pt").exists()
+    assert (checkpoint_dir / "latent_head.pt").exists()
+    assert (checkpoint_dir / "base_or_adapter" / "dummy.txt").exists()
+    assert (checkpoint_dir / "training_args.bin").exists()
+    assert not (checkpoint_dir / "model.safetensors").exists()

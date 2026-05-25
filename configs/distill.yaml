@@ -28,12 +28,12 @@ data:
   max_samples:
 training:
   learning_rate: 0.00002
-  batch_size: 1
-  gradient_accumulation_steps: 8
+  batch_size: 16
+  gradient_accumulation_steps: 4
   max_steps:
   max_seq_length: 1024
   precision: bf16
-  logging_steps: 50
+  logging_steps: 10
   eval_steps: 500
   save_steps: 500
   warmup_steps: 100
@@ -46,13 +46,13 @@ training:
 distillation:
   teacher_model: Qwen/Qwen3.5-9B
   teacher_torch_dtype: bfloat16
-  teacher_device_map: auto
-  teacher_batch_size: 1
+  teacher_device_map:
+  teacher_batch_size: 16 # 教師データ生成時のbatch size
   temperature: 0.7
   top_p: 0.9
   max_new_tokens: 128
   source_data_path: datasets/processed/sft.jsonl
-  student_checkpoint_dir: outputs/runs/sft/checkpoints/final
+  student_checkpoint_dir: outputs/runs/sft_4e/checkpoints/final
   overwrite_cache: false
   max_teacher_output_chars: 1000
   deduplicate: true

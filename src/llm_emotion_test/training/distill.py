@@ -11,6 +11,11 @@ from transformers import AutoModelForCausalLM, set_seed
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.distill import prepare_distillation_dataset
+from llm_emotion_test.distributed import (
+    distributed_rank,
+    ensure_distributed_initialized,
+    resolve_local_device_map,
+)
 from llm_emotion_test.models.loader import (
     build_soft_prompt_model,
     load_soft_prompt_model_from_checkpoint,
@@ -104,13 +109,15 @@ class DistillationTrainer(LatentLossLoggingTrainer):
 
 def train_distill(config: ExperimentConfig) -> dict[str, Any]:
     require_cuda_if_configured(config)
+    ensure_distributed_initialized()
     set_seed(config.runtime.seed)
     config.output.run_dir.mkdir(parents=True, exist_ok=True)
     config.output.checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    config.output.config_path.write_text(
-        yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
+    if distributed_rank() == 0:
+        config.output.config_path.write_text(
+            yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
 
     distill_stats = prepare_distillation_dataset(config)
     train_records = load_sft_records(config.data.processed_path, split="train")
@@ -189,8 +196,9 @@ def build_kl_teacher_model(config: ExperimentConfig, tokenizer):
     kwargs: dict[str, Any] = {
         "trust_remote_code": config.distillation.teacher_trust_remote_code,
     }
-    if config.distillation.teacher_device_map is not None:
-        kwargs["device_map"] = config.distillation.teacher_device_map
+    teacher_device_map = resolve_local_device_map(config.distillation.teacher_device_map)
+    if teacher_device_map is not None:
+        kwargs["device_map"] = teacher_device_map
     dtype = resolve_torch_dtype(config.distillation.teacher_torch_dtype)
     set_model_dtype_kwarg(kwargs, dtype)
     teacher = AutoModelForCausalLM.from_pretrained(

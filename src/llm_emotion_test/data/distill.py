@@ -12,6 +12,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.wrime import build_label_to_id, format_latent_marker
+from llm_emotion_test.distributed import (
+    distributed_barrier,
+    distributed_rank,
+    distributed_world_size,
+    is_distributed,
+    resolve_local_device_map,
+)
 from llm_emotion_test.models.loader import resolve_torch_dtype, set_model_dtype_kwarg
 
 
@@ -89,6 +96,9 @@ def prepare_distillation_dataset(
     *,
     generator: TeacherGenerator | None = None,
 ) -> dict[str, Any]:
+    log = teacher_generation_logger()
+    rank = distributed_rank()
+    world_size = distributed_world_size()
     source_path = config.distillation.source_data_path
     if not source_path.exists():
         raise FileNotFoundError(f"Distillation source data does not exist: {source_path}")
@@ -103,42 +113,154 @@ def prepare_distillation_dataset(
     )
     cache_path = resolve_teacher_cache_path(config)
     cached = {} if config.distillation.overwrite_cache else load_teacher_cache(cache_path)
+    if rank == 0:
+        log(
+            "Loaded "
+            f"{len(source_records)} source records; teacher cache has {len(cached)} rows at "
+            f"{cache_path}"
+        )
 
     rows_to_generate: list[dict[str, Any]] = []
-    prompts: list[str] = []
     for source in source_records:
         request = build_teacher_request(source, config, label_to_id)
         cache_key = teacher_cache_key(request)
         if cache_key in cached:
             continue
         rows_to_generate.append({**request, "cache_key": cache_key})
-        prompts.append(str(request["teacher_prompt"]))
 
-    if rows_to_generate:
-        active_generator = generator or HuggingFaceTeacherGenerator(config)
-        generated_outputs = list(
-            generate_in_batches(
-                active_generator,
-                prompts,
-                batch_size=config.distillation.teacher_batch_size,
-            )
+    if rank == 0:
+        log(
+            f"Teacher generation needs {len(rows_to_generate)} new rows "
+            f"across {world_size} worker(s)"
         )
-        for request, output in zip(rows_to_generate, generated_outputs, strict=True):
-            raw_cached_row = {
-                "base_input_text": request["base_input_text"],
-                "teacher_instruction": request["teacher_instruction"],
-                "teacher_output_text": output,
-                "emotion_label": request["emotion_label"],
-                "student_input_latent_id": request["student_input_latent_id"],
-                "student_target_latent_id": request["student_target_latent_id"],
-                "split": request["split"],
-            }
-            normalized = normalize_teacher_record(raw_cached_row, config)
-            if normalized is None:
-                continue
-            cached[str(request["cache_key"])] = normalized.as_json()
-        write_teacher_cache(cached.values(), cache_path)
+    if rows_to_generate:
+        generated_rows = generate_teacher_cache_rows(
+            rows_to_generate,
+            config,
+            generator=generator,
+            log=log,
+        )
+        if is_distributed() and generator is None:
+            shard_path = teacher_cache_shard_path(cache_path, rank)
+            write_jsonl(generated_rows, shard_path)
+            log(f"Wrote {len(generated_rows)} generated rows to {shard_path}")
+            distributed_barrier()
+            if rank == 0:
+                cached = merge_teacher_cache_shards(
+                    cached,
+                    cache_path=cache_path,
+                    world_size=world_size,
+                )
+                log(f"Wrote merged teacher cache with {len(cached)} rows to {cache_path}")
+            distributed_barrier()
+            cached = load_teacher_cache(cache_path)
+        else:
+            for generated_row in generated_rows:
+                cached[teacher_cache_key(generated_row)] = generated_row
+            write_teacher_cache(cached.values(), cache_path)
+            log(f"Wrote teacher cache with {len(cached)} rows to {cache_path}")
+    elif is_distributed():
+        distributed_barrier()
 
+    if is_distributed():
+        cached = load_teacher_cache(cache_path)
+
+    records = build_distillation_records(source_records, cached, config, label_to_id)
+    output_path = resolve_distill_data_path(config)
+    student_path = config.data.processed_path
+    if rank == 0:
+        write_jsonl(records.records, output_path)
+        write_jsonl(
+            [
+                DistillationRecord(**record).as_student_sft_record(
+                    marker_template=config.soft_prompt.latent_marker_template,
+                )
+                for record in records.records
+            ],
+            student_path,
+        )
+        log(
+            "Wrote distillation data: "
+            f"{len(records.records)} rows to {output_path}, student data to {student_path}, "
+            f"dropped={records.dropped}"
+        )
+    if is_distributed():
+        distributed_barrier()
+    return {
+        "output_path": str(output_path),
+        "student_data_path": str(student_path),
+        "teacher_cache_path": str(cache_path),
+        "num_source_records": len(source_records),
+        "num_distill_records": len(records.records),
+        "num_dropped_records": records.dropped,
+    }
+
+
+def generate_teacher_cache_rows(
+    rows_to_generate: Sequence[Mapping[str, Any]],
+    config: ExperimentConfig,
+    *,
+    generator: TeacherGenerator | None,
+    log: Callable[[str], None],
+) -> list[dict[str, Any]]:
+    rank = distributed_rank()
+    world_size = distributed_world_size() if generator is None else 1
+    local_rows = list(rows_to_generate[rank::world_size])
+    prompts = [str(row["teacher_prompt"]) for row in local_rows]
+    log(
+        f"Assigned {len(local_rows)}/{len(rows_to_generate)} teacher rows "
+        f"with batch_size={config.distillation.teacher_batch_size}"
+    )
+    if not local_rows:
+        return []
+
+    if generator is None:
+        log(f"Loading teacher model {config.distillation.teacher_model}")
+    active_generator = generator or HuggingFaceTeacherGenerator(config)
+    log(f"Teacher model ready; generating {len(prompts)} prompts")
+    generated_outputs = list(
+        generate_in_batches(
+            active_generator,
+            prompts,
+            batch_size=config.distillation.teacher_batch_size,
+            log=log,
+        )
+    )
+    generated_rows: list[dict[str, Any]] = []
+    for request, output in zip(local_rows, generated_outputs, strict=True):
+        raw_cached_row = {
+            "base_input_text": request["base_input_text"],
+            "teacher_instruction": request["teacher_instruction"],
+            "teacher_output_text": output,
+            "emotion_label": request["emotion_label"],
+            "student_input_latent_id": request["student_input_latent_id"],
+            "student_target_latent_id": request["student_target_latent_id"],
+            "split": request["split"],
+        }
+        normalized = normalize_teacher_record(raw_cached_row, config)
+        if normalized is not None:
+            generated_rows.append(normalized.as_json())
+    log(f"Generated {len(generated_rows)} usable teacher rows")
+    if generator is None:
+        del active_generator
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        log("Released teacher generation model")
+    return generated_rows
+
+
+@dataclass(frozen=True)
+class BuiltDistillationRecords:
+    records: list[dict[str, Any]]
+    dropped: int
+
+
+def build_distillation_records(
+    source_records: Sequence[Mapping[str, Any]],
+    cached: Mapping[str, Mapping[str, Any]],
+    config: ExperimentConfig,
+    label_to_id: Mapping[str, int],
+) -> BuiltDistillationRecords:
     records: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     dropped = 0
@@ -162,25 +284,29 @@ def prepare_distillation_dataset(
             continue
         seen.add(dedupe_key)
         records.append(record.as_json())
+    return BuiltDistillationRecords(records=records, dropped=dropped)
 
-    output_path = write_jsonl(records, resolve_distill_data_path(config))
-    student_path = write_jsonl(
-        [
-            DistillationRecord(**record).as_student_sft_record(
-                marker_template=config.soft_prompt.latent_marker_template,
-            )
-            for record in records
-        ],
-        config.data.processed_path,
-    )
-    return {
-        "output_path": str(output_path),
-        "student_data_path": str(student_path),
-        "teacher_cache_path": str(cache_path),
-        "num_source_records": len(source_records),
-        "num_distill_records": len(records),
-        "num_dropped_records": dropped,
-    }
+
+def merge_teacher_cache_shards(
+    cached: dict[str, dict[str, Any]],
+    *,
+    cache_path: Path,
+    world_size: int,
+) -> dict[str, dict[str, Any]]:
+    merged = dict(cached)
+    for shard_rank in range(world_size):
+        shard_path = teacher_cache_shard_path(cache_path, shard_rank)
+        if not shard_path.exists():
+            continue
+        for row in load_jsonl(shard_path):
+            merged[teacher_cache_key(row)] = row
+        shard_path.unlink()
+    write_teacher_cache(merged.values(), cache_path)
+    return merged
+
+
+def teacher_cache_shard_path(cache_path: Path, rank: int) -> Path:
+    return cache_path.with_name(f"{cache_path.name}.rank{rank}.tmp")
 
 
 def build_teacher_request(
@@ -281,8 +407,17 @@ def generate_in_batches(
     prompts: Sequence[str],
     *,
     batch_size: int,
+    log: Callable[[str], None] | None = None,
 ) -> Iterable[str]:
+    total_batches = (len(prompts) + batch_size - 1) // batch_size
     for start in range(0, len(prompts), batch_size):
+        if log is not None:
+            batch_index = start // batch_size + 1
+            end = min(start + batch_size, len(prompts))
+            log(
+                f"Generating teacher batch {batch_index}/{total_batches} "
+                f"(rows {start + 1}-{end})"
+            )
         yield from generator(prompts[start : start + batch_size])
 
 
@@ -300,8 +435,9 @@ class HuggingFaceTeacherGenerator:
         kwargs: dict[str, Any] = {
             "trust_remote_code": config.distillation.teacher_trust_remote_code,
         }
-        if config.distillation.teacher_device_map is not None:
-            kwargs["device_map"] = config.distillation.teacher_device_map
+        teacher_device_map = resolve_local_device_map(config.distillation.teacher_device_map)
+        if teacher_device_map is not None:
+            kwargs["device_map"] = teacher_device_map
         dtype = resolve_torch_dtype(config.distillation.teacher_torch_dtype)
         set_model_dtype_kwarg(kwargs, dtype)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -355,6 +491,15 @@ def resolve_distill_data_path(config: ExperimentConfig) -> Path:
     return config.distillation.distill_data_path or (
         config.output.run_dir / "distillation_data.jsonl"
     )
+
+
+def teacher_generation_logger() -> Callable[[str], None]:
+    rank = distributed_rank()
+
+    def log(message: str) -> None:
+        print(f"[distill:rank{rank}] {message}", flush=True)
+
+    return log
 
 
 def load_teacher_cache(path: Path) -> dict[str, dict[str, Any]]:

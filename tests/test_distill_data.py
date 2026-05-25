@@ -7,8 +7,10 @@ from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.distill import (
     build_teacher_instruction,
     build_teacher_prompt,
+    generate_in_batches,
     prepare_distillation_dataset,
 )
+from llm_emotion_test.distributed import resolve_local_device_map
 from llm_emotion_test.training.distill import build_distill_student_prompt
 
 
@@ -98,3 +100,30 @@ def test_prepare_distillation_dataset_uses_cache_and_writes_student_sft(tmp_path
         generator=lambda _prompts: (_ for _ in ()).throw(AssertionError("cache miss")),
     )
     assert cached_stats["num_distill_records"] == 1
+
+
+def test_generate_in_batches_logs_progress() -> None:
+    messages: list[str] = []
+    outputs = list(
+        generate_in_batches(
+            lambda prompts: [prompt.upper() for prompt in prompts],
+            ["a", "b", "c"],
+            batch_size=2,
+            log=messages.append,
+        )
+    )
+
+    assert outputs == ["A", "B", "C"]
+    assert messages == [
+        "Generating teacher batch 1/2 (rows 1-2)",
+        "Generating teacher batch 2/2 (rows 3-3)",
+    ]
+
+
+def test_resolve_local_device_map_uses_local_rank_for_distributed_cuda(monkeypatch) -> None:
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setenv("WORLD_SIZE", "3")
+    monkeypatch.setenv("LOCAL_RANK", "2")
+
+    assert resolve_local_device_map("auto") == {"": 2}
+    assert resolve_local_device_map(None) == {"": 2}
