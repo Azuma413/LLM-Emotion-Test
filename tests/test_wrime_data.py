@@ -4,6 +4,7 @@ from llm_emotion_test.data.wrime import (
     build_label_to_id,
     convert_wrime_row,
     iter_prepared_samples,
+    split_text_for_continuation,
     summarize_records,
 )
 
@@ -39,7 +40,10 @@ def test_convert_wrime_row_uses_primary_emotion_as_input_latent() -> None:
     assert sample.input_latent_id == label_to_id["sadness"]
     assert sample.target_latent_id == sample.input_latent_id
     assert sample.emotion_labels == {"joy": 0, "sadness": 3, "anger": 1}
-    assert sample.input_text.endswith("<|emotion|>001<|/emotion|>")
+    assert sample.source_text == "今日は少しつらい。"
+    assert sample.input_text
+    assert sample.input_text in sample.source_text
+    assert sample.target_text.startswith(sample.source_text[len(sample.input_text) :].strip())
     assert sample.target_text.endswith("<|emotion|>001<|/emotion|>")
 
 
@@ -69,6 +73,13 @@ def test_iter_prepared_samples_respects_global_max_samples() -> None:
     assert [sample.split for sample in samples] == ["train", "train"]
 
 
+def test_split_text_for_continuation_prefers_nearby_punctuation() -> None:
+    prefix, continuation = split_text_for_continuation("今日は晴れです。散歩します。")
+
+    assert prefix == "今日は晴れです。"
+    assert continuation == "散歩します。"
+
+
 def test_summarize_records_counts_distribution() -> None:
     records = [
         {
@@ -78,6 +89,7 @@ def test_summarize_records_counts_distribution() -> None:
             "input_latent_id": 0,
             "target_latent_id": 0,
             "split": "train",
+            "source_text": "aa",
         },
         {
             "input_text": "b",
@@ -86,6 +98,7 @@ def test_summarize_records_counts_distribution() -> None:
             "input_latent_id": 1,
             "target_latent_id": 0,
             "split": "validation",
+            "source_text": "bbb",
         },
     ]
 

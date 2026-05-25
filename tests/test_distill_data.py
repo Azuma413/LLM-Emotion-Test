@@ -9,6 +9,7 @@ from llm_emotion_test.data.distill import (
     build_teacher_prompt,
     prepare_distillation_dataset,
 )
+from llm_emotion_test.training.distill import build_distill_student_prompt
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
@@ -24,12 +25,14 @@ def test_teacher_prompt_includes_japanese_emotion_instruction() -> None:
     prompt = build_teacher_prompt(
         "今日は疲れた",
         instruction,
-        latent_marker="<|emotion|>004<|/emotion|>",
     )
 
     assert "怒りっぽい" in instruction
-    assert "日本語で返答" in prompt
-    assert "<|emotion|>004<|/emotion|>" in prompt
+    assert "日本語で自然に返答" in prompt
+    assert "入力:" in prompt
+    assert "<|emotion|>" not in prompt
+    assert "latent marker" not in prompt
+    assert "ユーザー入力" not in prompt
 
 
 def test_prepare_distillation_dataset_uses_cache_and_writes_student_sft(tmp_path: Path) -> None:
@@ -44,6 +47,7 @@ def test_prepare_distillation_dataset_uses_cache_and_writes_student_sft(tmp_path
                 "input_latent_id": 1,
                 "target_latent_id": 1,
                 "split": "train",
+                "source_text": "今日は疲れた。休みたい",
             }
         ],
     )
@@ -75,6 +79,19 @@ def test_prepare_distillation_dataset_uses_cache_and_writes_student_sft(tmp_path
     assert student_records[0]["input_text"] == "今日は疲れた"
     assert student_records[0]["input_latent_id"] == 1
     assert student_records[0]["target_text"].endswith("<|emotion|>001<|/emotion|>")
+    assert student_records[0]["target_text"].count("<|emotion|>") == 1
+    assert build_distill_student_prompt(student_records[0]) == "今日は疲れた"
+
+    cache_records = [
+        json.loads(line)
+        for line in (config.output.run_dir / "teacher_generations.jsonl").read_text().splitlines()
+    ]
+    assert "<|emotion|>" not in cache_records[0]["teacher_output_text"]
+    distill_records = [
+        json.loads(line)
+        for line in (config.output.run_dir / "distillation_data.jsonl").read_text().splitlines()
+    ]
+    assert "<|emotion|>" not in distill_records[0]["teacher_output_text"]
 
     cached_stats = prepare_distillation_dataset(
         config,

@@ -12,7 +12,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.wrime import build_label_to_id, format_latent_marker
-from llm_emotion_test.models.latent import parse_latent_id
 from llm_emotion_test.models.loader import resolve_torch_dtype
 
 
@@ -52,10 +51,14 @@ class DistillationRecord:
             "split": self.split,
         }
 
-    def as_student_sft_record(self) -> dict[str, Any]:
+    def as_student_sft_record(self, *, marker_template: str) -> dict[str, Any]:
         return {
             "input_text": self.base_input_text,
-            "target_text": self.teacher_output_text,
+            "target_text": append_latent_marker(
+                self.teacher_output_text,
+                latent_id=self.student_target_latent_id,
+                marker_template=marker_template,
+            ),
             "emotion_labels": {self.emotion_label: 1},
             "input_latent_id": self.student_input_latent_id,
             "target_latent_id": self.student_target_latent_id,
@@ -73,16 +76,11 @@ def build_teacher_instruction(emotion_label: str) -> str:
 def build_teacher_prompt(
     base_input_text: str,
     teacher_instruction: str,
-    *,
-    latent_marker: str,
 ) -> str:
     return (
-        "次のユーザー入力に日本語で返答してください。\n"
-        f"感情表現の指示: {teacher_instruction}\n"
-        "返答本文の最後に、指定されたlatent markerをそのまま1回だけ付けてください。\n"
-        f"latent marker: {latent_marker}\n\n"
-        f"ユーザー入力:\n{base_input_text}\n\n"
-        "返答:"
+        "あなたは日本語で自然に返答するアシスタントです。\n"
+        f"感情表現の指示: {teacher_instruction}\n\n"
+        f"入力:\n{base_input_text}"
     )
 
 
@@ -126,7 +124,7 @@ def prepare_distillation_dataset(
             )
         )
         for request, output in zip(rows_to_generate, generated_outputs, strict=True):
-            cached[str(request["cache_key"])] = {
+            raw_cached_row = {
                 "base_input_text": request["base_input_text"],
                 "teacher_instruction": request["teacher_instruction"],
                 "teacher_output_text": output,
@@ -135,6 +133,10 @@ def prepare_distillation_dataset(
                 "student_target_latent_id": request["student_target_latent_id"],
                 "split": request["split"],
             }
+            normalized = normalize_teacher_record(raw_cached_row, config)
+            if normalized is None:
+                continue
+            cached[str(request["cache_key"])] = normalized.as_json()
         write_teacher_cache(cached.values(), cache_path)
 
     records: list[dict[str, Any]] = []
@@ -163,7 +165,12 @@ def prepare_distillation_dataset(
 
     output_path = write_jsonl(records, resolve_distill_data_path(config))
     student_path = write_jsonl(
-        [DistillationRecord(**record).as_student_sft_record() for record in records],
+        [
+            DistillationRecord(**record).as_student_sft_record(
+                marker_template=config.soft_prompt.latent_marker_template,
+            )
+            for record in records
+        ],
         config.data.processed_path,
     )
     return {
@@ -184,7 +191,6 @@ def build_teacher_request(
     latent_id = int(source["input_latent_id"])
     emotion_label = label_for_latent_id(latent_id, label_to_id)
     target_latent_id = int(source.get("target_latent_id", latent_id))
-    marker = format_latent_marker(config.soft_prompt.latent_marker_template, target_latent_id)
     base_input_text = strip_latent_markers(
         str(source["input_text"]),
         marker_template=config.soft_prompt.latent_marker_template,
@@ -196,7 +202,6 @@ def build_teacher_request(
         "teacher_prompt": build_teacher_prompt(
             base_input_text,
             instruction,
-            latent_marker=marker,
         ),
         "emotion_label": emotion_label,
         "student_input_latent_id": latent_id,
@@ -229,27 +234,14 @@ def normalize_teacher_record(
     if not output:
         return None
     output = output[: config.distillation.max_teacher_output_chars].strip()
+    output = strip_latent_markers(
+        output,
+        marker_template=config.soft_prompt.latent_marker_template,
+    )
+    if not output:
+        return None
 
     target_latent_id = int(row["student_target_latent_id"])
-    marker = format_latent_marker(config.soft_prompt.latent_marker_template, target_latent_id)
-    try:
-        parsed_latent_id = parse_latent_id(
-            output,
-            num_latents=config.soft_prompt.num_latents,
-            marker_template=config.soft_prompt.latent_marker_template,
-            previous_latent_id=target_latent_id,
-            fallback="error",
-        )
-    except ValueError:
-        if config.distillation.require_teacher_latent_marker:
-            return None
-        output = f"{output}\n{marker}"
-        parsed_latent_id = target_latent_id
-
-    if parsed_latent_id != target_latent_id:
-        if config.distillation.require_teacher_latent_marker:
-            return None
-        output = f"{output}\n{marker}"
 
     return DistillationRecord(
         base_input_text=str(row["base_input_text"]).strip(),
@@ -260,6 +252,12 @@ def normalize_teacher_record(
         student_target_latent_id=target_latent_id,
         split=str(row.get("split", "train")),
     )
+
+
+def append_latent_marker(text: str, *, latent_id: int, marker_template: str) -> str:
+    marker = format_latent_marker(marker_template, latent_id)
+    stripped = strip_latent_markers(text, marker_template=marker_template)
+    return f"{stripped}\n{marker}" if stripped else marker
 
 
 def teacher_cache_key(request: Mapping[str, Any]) -> str:

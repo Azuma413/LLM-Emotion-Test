@@ -9,6 +9,7 @@ uv run llm-emotion-test prepare-data --config configs/sft.yaml
 ```
 
 WRIME を読み込み、SFT/蒸留用の JSONL を `datasets/processed/` に出力する。`data.max_samples` を小さくすると smoke test 用データを作れる。
+SFT JSONL は `soft_prompt(input_latent_id) + 文の前半` を入力し、`文の後半 + latent marker` を target にする continuation 形式で作られる。latent ID はテキスト prompt には書き込まれない。
 変換済み JSONL の品質集計だけを再実行する場合は以下を使う。
 
 ```bash
@@ -23,7 +24,7 @@ uv run llm-emotion-test summarize-data --config configs/sft.yaml
 uv run llm-emotion-test train-sft --config configs/sft.yaml
 ```
 
-入力 soft prompt と出力 latent marker を含む SFT を実行し、`outputs/runs/<run_id>/checkpoints/` に checkpoint を保存する。
+入力 soft prompt と WRIME 文 prefix から continuation と latent marker を生成する SFT を実行し、`outputs/runs/<run_id>/checkpoints/` に checkpoint を保存する。
 標準設定では `outputs/runs/sft/checkpoints/final` が後続の自己蒸留の初期モデルになる。
 
 ## 3. 自己蒸留
@@ -32,7 +33,7 @@ uv run llm-emotion-test train-sft --config configs/sft.yaml
 uv run llm-emotion-test distill --config configs/distill.yaml
 ```
 
-教師モデルの感情指示付き応答を生成またはキャッシュから再利用し、学生モデルを教師出力へ合わせて学習する。教師生成のキャッシュ、蒸留 JSONL、学生用 JSONL は run directory に保存される。
+教師モデルの感情指示付き応答を生成またはキャッシュから再利用し、学生モデルを教師出力へ合わせて学習する。教師モデルは latent marker を生成せず、学生用 JSONL の target にだけルールベースで latent marker を付与する。教師生成のキャッシュ、蒸留 JSONL、学生用 JSONL は run directory に保存される。
 `distillation.student_checkpoint_dir` に SFT の final checkpoint を指定すると、SFT 後のモデルを学生モデルとしてロードして蒸留する。標準設定では `outputs/runs/sft/checkpoints/final` から開始し、`outputs/runs/distill/checkpoints/final` を保存する。
 
 ## 4. GRPO / AT-GRPO
@@ -44,7 +45,7 @@ uv run llm-emotion-test train-rl --config configs/rl_grpo.yaml
 ```
 
 標準設定では `rl_task.policy_backend: llm` と `rl_task.resume_from_checkpoint: outputs/runs/distill/checkpoints/final` を使い、蒸留後の soft prompt モデルを AT-GRPO の初期 policy としてロードする。`configs/rl_grpo.yaml` の `rl_task.policy_backend` を `tabular_smoke` にすると、LLM 推論なしで交渉環境、rollout buffer、turn-wise grouped advantage、checkpoint 保存を確認できる。
-第三者回答器はデフォルトでは rule-based だが、`rl_task.third_party_backend: llm` にすると第三者 LLM が `<answer>1234</answer>` 形式の暫定回答を生成する。
+交渉中の A/B agent は直接回答せず、相手に有用な制約共有だけを行う。第三者回答器はデフォルトでは rule-based だが、`rl_task.third_party_backend: llm` にすると第三者 LLM が `<answer>1234</answer>` 形式の暫定回答を生成する。
 LLM 版 AT-GRPO は checkpoint directory 内の `rl_state.pt` に optimizer state と episode index を保存し、`rl_task.resume_from_checkpoint` で再開できる。
 
 主な出力:

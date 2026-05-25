@@ -17,6 +17,11 @@ training:
   max_seq_length: 1024
   generation_max_new_tokens: 64
   report_to: none
+data:
+  sft_task: continuation
+  min_prefix_chars: 1
+  min_target_chars: 1
+  target_latent_strategy: copy_input
 rl_task:
   policy_backend: llm
   resume_from_checkpoint: outputs/runs/distill/checkpoints/final

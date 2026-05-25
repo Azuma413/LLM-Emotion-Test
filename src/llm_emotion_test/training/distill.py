@@ -29,7 +29,7 @@ from llm_emotion_test.training.sft import (
 
 
 def build_distill_student_prompt(record: Mapping[str, Any]) -> str:
-    return "ユーザー入力:\n" f"{record['input_text']}\n\n" "応答:\n"
+    return str(record["input_text"])
 
 
 class DistillationStudentDataset(Dataset):

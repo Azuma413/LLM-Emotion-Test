@@ -40,6 +40,7 @@ class PreparedSample:
     input_latent_id: int
     target_latent_id: int
     split: str
+    source_text: str
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -49,6 +50,7 @@ class PreparedSample:
             "input_latent_id": self.input_latent_id,
             "target_latent_id": self.target_latent_id,
             "split": self.split,
+            "source_text": self.source_text,
         }
 
 
@@ -111,6 +113,9 @@ def prepare_wrime_dataset(config: ExperimentConfig) -> dict[str, Any]:
         representative_label_map=config.data.representative_label_map,
         latent_marker_template=config.soft_prompt.latent_marker_template,
         copy_input_latent_probability=config.data.copy_input_latent_probability,
+        min_prefix_chars=config.data.min_prefix_chars,
+        min_target_chars=config.data.min_target_chars,
+        target_latent_strategy=config.data.target_latent_strategy,
         rng=rng,
         max_samples=config.data.max_samples,
     )
@@ -172,6 +177,9 @@ def iter_prepared_samples(
     latent_marker_template: str,
     copy_input_latent_probability: float,
     rng: random.Random,
+    min_prefix_chars: int = 1,
+    min_target_chars: int = 1,
+    target_latent_strategy: str = "copy_input",
     max_samples: int | None = None,
 ) -> Iterable[PreparedSample]:
     count = 0
@@ -188,6 +196,9 @@ def iter_prepared_samples(
                 representative_label_map=representative_label_map,
                 latent_marker_template=latent_marker_template,
                 copy_input_latent_probability=copy_input_latent_probability,
+                min_prefix_chars=min_prefix_chars,
+                min_target_chars=min_target_chars,
+                target_latent_strategy=target_latent_strategy,
                 rng=rng,
             )
             count += 1
@@ -203,6 +214,9 @@ def convert_wrime_row(
     latent_marker_template: str,
     copy_input_latent_probability: float,
     rng: random.Random,
+    min_prefix_chars: int = 1,
+    min_target_chars: int = 1,
+    target_latent_strategy: str = "copy_input",
 ) -> PreparedSample:
     text = str(row[text_column]).strip()
     emotion_labels = normalize_emotion_labels(
@@ -213,15 +227,24 @@ def convert_wrime_row(
         key=lambda label: (emotion_labels.get(label, 0), -label_to_id[label]),
     )
     input_latent_id = label_to_id[primary_label]
-    if rng.random() < copy_input_latent_probability:
+    if target_latent_strategy == "copy_input":
         target_latent_id = input_latent_id
+    elif target_latent_strategy == "sample_uniform":
+        if rng.random() < copy_input_latent_probability:
+            target_latent_id = input_latent_id
+        else:
+            target_latent_id = rng.randrange(len(label_to_id))
     else:
-        target_latent_id = rng.randrange(len(label_to_id))
+        raise ValueError(f"Unsupported target_latent_strategy: {target_latent_strategy}")
 
-    input_marker = format_latent_marker(latent_marker_template, input_latent_id)
+    prefix, continuation = split_text_for_continuation(
+        text,
+        min_prefix_chars=min_prefix_chars,
+        min_target_chars=min_target_chars,
+    )
     target_marker = format_latent_marker(latent_marker_template, target_latent_id)
-    input_text = f"{text}\n{input_marker}"
-    target_text = f"{text}\n{target_marker}"
+    input_text = prefix
+    target_text = f"{continuation}\n{target_marker}"
 
     return PreparedSample(
         input_text=input_text,
@@ -230,7 +253,37 @@ def convert_wrime_row(
         input_latent_id=input_latent_id,
         target_latent_id=target_latent_id,
         split=split,
+        source_text=text,
     )
+
+
+def split_text_for_continuation(
+    text: str,
+    *,
+    min_prefix_chars: int = 1,
+    min_target_chars: int = 1,
+) -> tuple[str, str]:
+    stripped = text.strip()
+    if not stripped:
+        return "", ""
+    if len(stripped) <= min_prefix_chars + min_target_chars:
+        split_at = min(max(min_prefix_chars, 1), max(len(stripped) - min_target_chars, 1))
+        split_at = min(split_at, len(stripped) - 1) if len(stripped) > 1 else len(stripped)
+        return stripped[:split_at], stripped[split_at:]
+
+    lower = min_prefix_chars
+    upper = len(stripped) - min_target_chars
+    midpoint = len(stripped) // 2
+    punctuation = set("。．.!！？!?、，, 　\t\n")
+    candidates: list[int] = []
+    for index in range(lower, upper + 1):
+        if stripped[index - 1] in punctuation:
+            candidates.append(index)
+        if index < len(stripped) and stripped[index] in punctuation and index + 1 <= upper:
+            candidates.append(index + 1)
+    split_at = min(candidates, key=lambda index: abs(index - midpoint)) if candidates else midpoint
+    split_at = max(lower, min(split_at, upper))
+    return stripped[:split_at].strip(), stripped[split_at:].strip()
 
 
 def normalize_emotion_labels(

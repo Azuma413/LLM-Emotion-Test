@@ -13,6 +13,10 @@ model:
 data:
   processed_dir: datasets/distill
   processed_filename: student-sft.jsonl
+  sft_task: continuation
+  min_prefix_chars: 1
+  min_target_chars: 1
+  target_latent_strategy: copy_input
   max_samples:
 training:
   learning_rate: 0.00002
@@ -42,7 +46,6 @@ distillation:
   source_data_path: datasets/processed/sft.jsonl
   student_checkpoint_dir: outputs/runs/sft/checkpoints/final
   overwrite_cache: false
-  require_teacher_latent_marker: false
   max_teacher_output_chars: 1000
   deduplicate: true
   kl_divergence_weight: 0.0

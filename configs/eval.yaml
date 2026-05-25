@@ -6,6 +6,10 @@ model:
   device_map: auto
 data:
   processed_dir: datasets/processed
+  sft_task: continuation
+  min_prefix_chars: 1
+  min_target_chars: 1
+  target_latent_strategy: copy_input
   max_samples:
 training:
   max_steps:

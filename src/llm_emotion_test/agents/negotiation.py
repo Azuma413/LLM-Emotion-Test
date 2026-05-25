@@ -209,9 +209,7 @@ def build_agent_prompt(observation: Mapping[str, Any]) -> str:
         lines.append(f"Agent {item['agent_id']}: {item['action']['message_text']}")
     lines.extend(
         [
-            "次の発話では、相手に有用な制約または推定を共有してください。",
-            "回答候補がある場合は <answer>1234</answer> の形式で含めてください。",
-            "最後に必ず <|emotion|>000<|/emotion|> の形式で latent を出力してください。",
+            "次の発話では、相手に有用な制約を共有してください。",
         ]
     )
     return "\n".join(lines)

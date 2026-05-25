@@ -18,7 +18,7 @@ class TinyTokenizer:
 
 def test_sft_dataset_builds_prompt_and_target() -> None:
     record = {
-        "input_text": "今日は疲れた\n<|emotion|>001<|/emotion|>",
+        "input_text": "今日は疲れ",
         "target_text": "休みましょう\n<|emotion|>001<|/emotion|>",
         "input_latent_id": 1,
         "target_latent_id": 1,
@@ -26,8 +26,10 @@ def test_sft_dataset_builds_prompt_and_target() -> None:
 
     item = EmotionSFTDataset([record])[0]
 
-    assert "ユーザー入力" in item["prompt"]
-    assert "現在のlatent ID: 001" in item["prompt"]
+    assert item["prompt"] == "今日は疲れ"
+    assert "ユーザー入力" not in item["prompt"]
+    assert "現在のlatent ID" not in item["prompt"]
+    assert "<|emotion|>" not in item["prompt"]
     assert item["target"] == record["target_text"]
     assert item["latent_id"] == 1
 

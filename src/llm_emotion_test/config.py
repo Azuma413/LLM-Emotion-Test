@@ -79,6 +79,10 @@ class DataConfig(BaseModel):
     )
     representative_label_map: dict[str, str] = Field(default_factory=dict)
     copy_input_latent_probability: float = Field(default=0.5, ge=0.0, le=1.0)
+    sft_task: Literal["continuation"] = "continuation"
+    min_prefix_chars: int = Field(default=1, ge=1)
+    min_target_chars: int = Field(default=1, ge=1)
+    target_latent_strategy: Literal["copy_input", "sample_uniform"] = "copy_input"
     max_samples: int | None = Field(default=None, ge=1)
     seed: int = 42
 

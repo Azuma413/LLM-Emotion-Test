@@ -34,7 +34,10 @@ data:
     - disgust
     - trust
   representative_label_map: {}
-  copy_input_latent_probability: 0.5
+  sft_task: continuation
+  min_prefix_chars: 1
+  min_target_chars: 1
+  target_latent_strategy: copy_input
   max_samples:
   seed: 42
 training:

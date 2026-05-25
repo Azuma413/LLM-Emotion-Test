@@ -34,12 +34,7 @@ def load_sft_records(path: str | Path, *, split: str | None = None) -> list[dict
 
 
 def build_sft_prompt(record: Mapping[str, Any]) -> str:
-    return (
-        "ユーザー入力:\n"
-        f"{record['input_text']}\n\n"
-        f"現在のlatent ID: {int(record['input_latent_id']):03d}\n"
-        "応答:\n"
-    )
+    return str(record["input_text"])
 
 
 def build_sft_target(record: Mapping[str, Any]) -> str:
