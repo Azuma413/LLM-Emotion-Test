@@ -10,6 +10,14 @@ model:
     - k_proj
     - v_proj
     - o_proj
+latent_training:
+  mode: regression
+  loss_weight: 1.0
+  target: soft_prompt_mean
+  detach_target: true
+  normalize: true
+  anchor_token: "<|latent_pred|>"
+  auxiliary_classification_weight: 0.0
 data:
   processed_dir: datasets/distill
   processed_filename: student-sft.jsonl
@@ -48,7 +56,7 @@ distillation:
   overwrite_cache: false
   max_teacher_output_chars: 1000
   deduplicate: true
-  kl_divergence_weight: 0.0
+  kl_divergence_weight: 0.1
 output:
   root: outputs/runs
   run_id: distill

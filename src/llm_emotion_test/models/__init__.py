@@ -4,6 +4,7 @@ from llm_emotion_test.models.latent import (
     LatentMarkerSpec,
     add_latent_special_tokens,
     parse_latent_id,
+    strip_terminal_latent_marker,
 )
 from llm_emotion_test.models.loader import (
     build_soft_prompt_model,
@@ -29,4 +30,5 @@ __all__ = [
     "load_tokenizer",
     "parse_latent_id",
     "save_model_checkpoint",
+    "strip_terminal_latent_marker",
 ]

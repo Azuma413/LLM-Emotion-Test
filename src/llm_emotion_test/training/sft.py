@@ -13,7 +13,7 @@ from transformers import Trainer, TrainingArguments, set_seed
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.wrime import prepare_wrime_dataset
-from llm_emotion_test.models.latent import parse_latent_id
+from llm_emotion_test.models.latent import LatentMarkerSpec, strip_terminal_latent_marker
 from llm_emotion_test.models.loader import build_soft_prompt_model, save_model_checkpoint
 
 
@@ -62,6 +62,9 @@ class EmotionSFTDataset(Dataset):
 class EmotionSFTDataCollator:
     tokenizer: Any
     max_seq_length: int
+    marker_template: str = "<|emotion|>{latent_id:03d}<|/emotion|>"
+    latent_training_mode: str = "regression"
+    anchor_token: str = "<|latent_pred|>"
 
     def __call__(self, features: Sequence[Mapping[str, Any]]) -> dict[str, torch.Tensor]:
         encoded_rows = [self._encode_feature(feature) for feature in features]
@@ -75,13 +78,15 @@ class EmotionSFTDataCollator:
         input_ids: list[list[int]] = []
         attention_mask: list[list[int]] = []
         labels: list[list[int]] = []
+        latent_positions: list[int] = []
         for row in encoded_rows:
             pad_length = max_length - len(row["input_ids"])
             input_ids.append(row["input_ids"] + [pad_token_id] * pad_length)
             attention_mask.append([1] * len(row["input_ids"]) + [0] * pad_length)
             labels.append(row["labels"] + [-100] * pad_length)
+            latent_positions.append(row["latent_position"])
 
-        return {
+        batch = {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
             "labels": torch.tensor(labels, dtype=torch.long),
@@ -89,28 +94,64 @@ class EmotionSFTDataCollator:
                 [int(feature["latent_id"]) for feature in features], dtype=torch.long
             ),
         }
+        if self.latent_training_mode != "marker_ce":
+            batch["target_latent_ids"] = torch.tensor(
+                [int(feature["target_latent_id"]) for feature in features],
+                dtype=torch.long,
+            )
+            batch["latent_positions"] = torch.tensor(latent_positions, dtype=torch.long)
+        return batch
 
     def _encode_feature(self, feature: Mapping[str, Any]) -> dict[str, list[int]]:
         prompt_ids = self.tokenizer(
             str(feature["prompt"]),
             add_special_tokens=False,
         )["input_ids"]
+        target_text = str(feature["target"])
+        if self.latent_training_mode == "regression":
+            target_text = strip_terminal_latent_marker(
+                target_text,
+                marker_template=self.marker_template,
+            )
         target_ids = self.tokenizer(
-            str(feature["target"]),
+            target_text,
             add_special_tokens=False,
         )["input_ids"]
         eos_token_id = self.tokenizer.eos_token_id
         if eos_token_id is not None:
             target_ids = target_ids + [int(eos_token_id)]
 
+        reserve_anchor = self.latent_training_mode != "marker_ce"
         prompt_ids, target_ids = truncate_prompt_and_target(
             prompt_ids,
             target_ids,
-            self.max_seq_length,
+            self.max_seq_length - 1 if reserve_anchor else self.max_seq_length,
         )
         input_ids = prompt_ids + target_ids
         labels = [-100] * len(prompt_ids) + target_ids
-        return {"input_ids": input_ids, "labels": labels}
+        latent_position = len(input_ids)
+        if reserve_anchor:
+            anchor_token_id = self._anchor_token_id()
+            input_ids = input_ids + [anchor_token_id]
+            labels = labels + [-100]
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+            "latent_position": latent_position,
+        }
+
+    def _anchor_token_id(self) -> int:
+        if hasattr(self.tokenizer, "convert_tokens_to_ids"):
+            token_id = self.tokenizer.convert_tokens_to_ids(self.anchor_token)
+            unknown_id = getattr(self.tokenizer, "unk_token_id", None)
+            if token_id is not None and token_id != unknown_id:
+                return int(token_id)
+        token_ids = self.tokenizer(self.anchor_token, add_special_tokens=False)["input_ids"]
+        if len(token_ids) != 1:
+            raise ValueError(
+                f"Latent anchor token must tokenize to one id, got {len(token_ids)} ids"
+            )
+        return int(token_ids[0])
 
 
 def truncate_prompt_and_target(
@@ -162,6 +203,34 @@ def _training_arguments_accepts_eval_strategy() -> bool:
     return "eval_strategy" in TrainingArguments.__init__.__code__.co_varnames
 
 
+class LatentLossLoggingTrainer(Trainer):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.last_text_loss: float | None = None
+        self.last_latent_loss: float | None = None
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        outputs = model(**inputs)
+        self._record_latent_losses(outputs)
+        loss = outputs.loss
+        return (loss, outputs) if return_outputs else loss
+
+    def _record_latent_losses(self, outputs) -> None:
+        text_loss = getattr(outputs, "text_loss", None)
+        latent_loss = getattr(outputs, "latent_loss", None)
+        if text_loss is not None:
+            self.last_text_loss = float(text_loss.detach().cpu())
+        if latent_loss is not None:
+            self.last_latent_loss = float(latent_loss.detach().cpu())
+
+    def log(self, logs: dict[str, float], *args, **kwargs) -> None:
+        if self.last_text_loss is not None:
+            logs["text_loss"] = self.last_text_loss
+        if self.last_latent_loss is not None:
+            logs["latent_loss"] = self.last_latent_loss
+        super().log(logs, *args, **kwargs)
+
+
 def train_sft(config: ExperimentConfig) -> dict[str, Any]:
     set_seed(config.runtime.seed)
     config.output.run_dir.mkdir(parents=True, exist_ok=True)
@@ -185,8 +254,11 @@ def train_sft(config: ExperimentConfig) -> dict[str, Any]:
     collator = EmotionSFTDataCollator(
         tokenizer=tokenizer,
         max_seq_length=config.training.max_seq_length,
+        marker_template=config.soft_prompt.latent_marker_template,
+        latent_training_mode=config.latent_training.mode,
+        anchor_token=config.latent_training.anchor_token,
     )
-    trainer = Trainer(
+    trainer = LatentLossLoggingTrainer(
         model=model,
         args=build_training_arguments(config),
         train_dataset=EmotionSFTDataset(train_records),
@@ -214,7 +286,10 @@ def train_sft(config: ExperimentConfig) -> dict[str, Any]:
         "train": dict(train_result.metrics),
         "eval": dict(eval_metrics),
         "final_checkpoint": str(final_checkpoint),
-        "sample_latent_marker_accuracy": latent_marker_accuracy(samples),
+        "sample_latent_accuracy": latent_accuracy(samples),
+        "sample_latent_marker_accuracy": latent_accuracy(samples),
+        "text_loss": trainer.last_text_loss,
+        "latent_loss": trainer.last_latent_loss,
     }
     write_jsonl([metrics], config.output.metrics_path)
     return metrics
@@ -250,28 +325,72 @@ def generate_sft_samples(
             pad_token_id=tokenizer.pad_token_id,
         )
         generated_text = tokenizer.decode(output_ids[0], skip_special_tokens=False)
-        predicted_latent_id = parse_latent_id(
-            generated_text,
-            num_latents=config.soft_prompt.num_latents,
-            marker_template=config.soft_prompt.latent_marker_template,
-            previous_latent_id=latent_id,
-            fallback=config.soft_prompt.invalid_latent_fallback,
-            neutral_latent_id=config.soft_prompt.neutral_latent_id,
+        predicted_latent_id, latent_distance = predict_latent_from_text(
+            model,
+            tokenizer,
+            prompt + generated_text,
+            input_latent_id=latent_id,
+            anchor_token=config.latent_training.anchor_token,
+        )
+        generated_with_marker = (
+            generated_text
+            + LatentMarkerSpec(config.soft_prompt.latent_marker_template).format(
+                predicted_latent_id
+            )
         )
         samples.append(
             {
                 "prompt": prompt,
                 "target_text": str(record["target_text"]),
-                "generated_text": generated_text,
+                "generated_text": generated_with_marker,
+                "generated_response_text": generated_text,
                 "input_latent_id": latent_id,
                 "target_latent_id": int(record["target_latent_id"]),
                 "predicted_latent_id": predicted_latent_id,
+                "latent_distance": latent_distance,
             }
         )
     return samples
 
 
-def latent_marker_accuracy(samples: Sequence[Mapping[str, Any]]) -> float | None:
+@torch.no_grad()
+def predict_latent_from_text(
+    model,
+    tokenizer,
+    text: str,
+    *,
+    input_latent_id: int,
+    anchor_token: str,
+) -> tuple[int, float]:
+    device = next(model.parameters()).device
+    encoded = tokenizer(text, add_special_tokens=False)["input_ids"]
+    anchor_id = _token_id(tokenizer, anchor_token)
+    input_ids = torch.tensor([list(encoded) + [anchor_id]], dtype=torch.long, device=device)
+    attention_mask = torch.ones_like(input_ids)
+    latent_positions = torch.tensor([len(encoded)], dtype=torch.long, device=device)
+    latent_ids = torch.tensor([input_latent_id], dtype=torch.long, device=device)
+    predicted, distances = model.predict_latent(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        latent_ids=latent_ids,
+        latent_positions=latent_positions,
+    )
+    return int(predicted[0].detach().cpu()), float(distances[0].detach().cpu())
+
+
+def _token_id(tokenizer, token: str) -> int:
+    if hasattr(tokenizer, "convert_tokens_to_ids"):
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        unknown_id = getattr(tokenizer, "unk_token_id", None)
+        if token_id is not None and token_id != unknown_id:
+            return int(token_id)
+    token_ids = tokenizer(token, add_special_tokens=False)["input_ids"]
+    if len(token_ids) != 1:
+        raise ValueError(f"Token must tokenize to one id, got {len(token_ids)} ids")
+    return int(token_ids[0])
+
+
+def latent_accuracy(samples: Sequence[Mapping[str, Any]]) -> float | None:
     if not samples:
         return None
     correct = sum(
@@ -279,6 +398,9 @@ def latent_marker_accuracy(samples: Sequence[Mapping[str, Any]]) -> float | None
         for sample in samples
     )
     return correct / len(samples)
+
+
+latent_marker_accuracy = latent_accuracy
 
 
 def write_jsonl(records: Sequence[Mapping[str, Any]], output_path: str | Path) -> Path:

@@ -7,7 +7,7 @@ import torch
 import yaml
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from transformers import AutoModelForCausalLM, Trainer, set_seed
+from transformers import AutoModelForCausalLM, set_seed
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.distill import prepare_distillation_dataset
@@ -20,9 +20,11 @@ from llm_emotion_test.models.loader import (
 )
 from llm_emotion_test.training.sft import (
     EmotionSFTDataCollator,
+    LatentLossLoggingTrainer,
     build_training_arguments,
     generate_sft_samples,
     latent_marker_accuracy,
+    latent_accuracy,
     load_sft_records,
     write_jsonl,
 )
@@ -49,11 +51,12 @@ class DistillationStudentDataset(Dataset):
         }
 
 
-class DistillationTrainer(Trainer):
+class DistillationTrainer(LatentLossLoggingTrainer):
     def __init__(self, *args, teacher_model=None, kl_weight: float = 0.0, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.teacher_model = teacher_model
         self.kl_weight = kl_weight
+        self.last_kl_loss: float | None = None
         if self.teacher_model is not None:
             self.teacher_model.eval()
             for parameter in self.teacher_model.parameters():
@@ -61,9 +64,12 @@ class DistillationTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         outputs = model(**inputs)
+        self._record_latent_losses(outputs)
         loss = outputs.loss
         if self.teacher_model is not None and self.kl_weight > 0.0:
-            loss = loss + self.kl_weight * self._kl_loss(model, outputs, inputs)
+            kl_loss = self._kl_loss(model, outputs, inputs)
+            self.last_kl_loss = float(kl_loss.detach().cpu())
+            loss = loss + self.kl_weight * kl_loss
         return (loss, outputs) if return_outputs else loss
 
     def _kl_loss(self, model, student_outputs, inputs) -> torch.Tensor:
@@ -123,6 +129,9 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
     collator = EmotionSFTDataCollator(
         tokenizer=tokenizer,
         max_seq_length=config.training.max_seq_length,
+        marker_template=config.soft_prompt.latent_marker_template,
+        latent_training_mode=config.latent_training.mode,
+        anchor_token=config.latent_training.anchor_token,
     )
     teacher_model = build_kl_teacher_model(config, tokenizer) if (
         config.distillation.kl_divergence_weight > 0.0
@@ -158,8 +167,12 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
         "train": dict(train_result.metrics),
         "eval": dict(eval_metrics),
         "final_checkpoint": str(final_checkpoint),
+        "sample_latent_accuracy": latent_accuracy(samples),
         "sample_latent_marker_accuracy": latent_marker_accuracy(samples),
         "kl_divergence_weight": config.distillation.kl_divergence_weight,
+        "kl_loss": trainer.last_kl_loss,
+        "text_loss": trainer.last_text_loss,
+        "latent_loss": trainer.last_latent_loss,
     }
     write_jsonl([metrics], config.output.metrics_path)
     return metrics

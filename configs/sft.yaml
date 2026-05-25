@@ -15,6 +15,14 @@ soft_prompt:
   prompt_length: 4 # emotion IDごとのトークン数
   init_strategy: normal
   latent_marker_template: "<|emotion|>{latent_id:03d}<|/emotion|>"
+latent_training:
+  mode: regression
+  loss_weight: 1.0
+  target: soft_prompt_mean
+  detach_target: true
+  normalize: true
+  anchor_token: "<|latent_pred|>"
+  auxiliary_classification_weight: 0.0
 data:
   dataset_name: shunk031/wrime
   dataset_config: ver1

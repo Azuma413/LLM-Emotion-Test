@@ -30,13 +30,27 @@ class DummyCausalLM(nn.Module):
         self.embedding = nn.Embedding(size, self.config.hidden_size)
         return self.embedding
 
-    def forward(self, *, inputs_embeds, attention_mask=None, labels=None, **_kwargs):
+    def forward(
+        self,
+        *,
+        inputs_embeds,
+        attention_mask=None,
+        labels=None,
+        output_hidden_states=False,
+        **_kwargs,
+    ):
         self.last_inputs_embeds_shape = tuple(inputs_embeds.shape)
         logits = self.head(inputs_embeds)
         loss = None
         if labels is not None:
             loss = logits.sum() * 0
-        return SimpleNamespace(logits=logits, loss=loss, attention_mask=attention_mask)
+        hidden_states = (inputs_embeds,) if output_hidden_states else None
+        return SimpleNamespace(
+            logits=logits,
+            loss=loss,
+            attention_mask=attention_mask,
+            hidden_states=hidden_states,
+        )
 
     def generate(self, *, inputs_embeds, attention_mask=None, **_kwargs):
         self.last_inputs_embeds_shape = tuple(inputs_embeds.shape)
@@ -64,6 +78,32 @@ def test_soft_prompt_forward_prepends_prompt_embeddings() -> None:
 
     assert base_model.last_inputs_embeds_shape == (2, 7, 8)
     assert output.logits.shape == (2, 7, 16)
+    assert output.loss is not None
+
+
+def test_soft_prompt_forward_returns_latent_loss() -> None:
+    base_model = DummyCausalLM()
+    soft_prompt = SoftPromptEmbedding(
+        num_latents=3,
+        prompt_length=4,
+        hidden_size=8,
+        init_strategy="zeros",
+    )
+    model = SoftPromptCausalLM(base_model, soft_prompt, latent_loss_weight=0.5)
+
+    input_ids = torch.tensor([[1, 2, 3, 4]])
+    labels = torch.tensor([[-100, 2, 3, -100]])
+    output = model(
+        input_ids=input_ids,
+        latent_ids=torch.tensor([0]),
+        labels=labels,
+        target_latent_ids=torch.tensor([2]),
+        latent_positions=torch.tensor([3]),
+    )
+
+    assert output.text_loss is not None
+    assert output.latent_loss is not None
+    assert output.pred_latent.shape == (1, 8)
     assert output.loss is not None
 
 
@@ -109,3 +149,21 @@ def test_soft_prompt_checkpoint_roundtrip(tmp_path: Path) -> None:
 
     assert restored.weight.shape == (2, 3, 5)
     assert torch.equal(restored.weight, soft_prompt.weight)
+
+
+def test_latent_head_checkpoint_roundtrip(tmp_path: Path) -> None:
+    soft_prompt = SoftPromptEmbedding(
+        num_latents=2,
+        prompt_length=3,
+        hidden_size=5,
+        init_strategy="normal",
+    )
+    model = SoftPromptCausalLM(DummyCausalLM(hidden_size=5), soft_prompt)
+    with torch.no_grad():
+        model.latent_head.weight.fill_(0.25)
+
+    checkpoint = model.save_latent_head(tmp_path)
+    restored = SoftPromptCausalLM(DummyCausalLM(hidden_size=5), soft_prompt)
+    assert restored.load_latent_head(checkpoint) is True
+
+    assert torch.equal(restored.latent_head.weight, model.latent_head.weight)

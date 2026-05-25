@@ -108,10 +108,11 @@ def run_train_sft(config_path: str | Path, console: Console) -> int:
     table.add_column("Value")
     table.add_row("final_checkpoint", str(metrics["final_checkpoint"]))
     table.add_row("eval_loss", str(metrics["eval"].get("eval_loss")))
-    table.add_row(
-        "sample_latent_marker_accuracy",
-        str(metrics["sample_latent_marker_accuracy"]),
+    sample_accuracy = metrics.get(
+        "sample_latent_accuracy",
+        metrics.get("sample_latent_marker_accuracy"),
     )
+    table.add_row("sample_latent_accuracy", str(sample_accuracy))
     console.print(table)
     return 0
 
@@ -139,10 +140,11 @@ def run_distill(config_path: str | Path, console: Console) -> int:
     table.add_row("num_distill_records", str(distill_stats["num_distill_records"]))
     table.add_row("final_checkpoint", str(metrics["final_checkpoint"]))
     table.add_row("eval_loss", str(metrics["eval"].get("eval_loss")))
-    table.add_row(
-        "sample_latent_marker_accuracy",
-        str(metrics["sample_latent_marker_accuracy"]),
+    sample_accuracy = metrics.get(
+        "sample_latent_accuracy",
+        metrics.get("sample_latent_marker_accuracy"),
     )
+    table.add_row("sample_latent_accuracy", str(sample_accuracy))
     console.print(table)
     return 0
 

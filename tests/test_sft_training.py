@@ -11,9 +11,15 @@ from llm_emotion_test.training.sft import (
 class TinyTokenizer:
     pad_token_id = 0
     eos_token_id = 1
+    unk_token_id = -1
 
     def __call__(self, text, add_special_tokens=False, **_kwargs):
         return {"input_ids": [ord(char) % 251 + 2 for char in text]}
+
+    def convert_tokens_to_ids(self, token):
+        if token == "<|latent_pred|>":
+            return 999
+        return self.unk_token_id
 
 
 def test_sft_dataset_builds_prompt_and_target() -> None:
@@ -49,8 +55,33 @@ def test_sft_collator_masks_prompt_loss() -> None:
     prompt_length = len(TinyTokenizer()(build_sft_prompt(record))["input_ids"])
     assert batch["input_ids"].shape == batch["labels"].shape
     assert batch["latent_ids"].tolist() == [2]
+    assert batch["target_latent_ids"].tolist() == [3]
+    assert batch["latent_positions"].tolist() == [batch["attention_mask"][0].sum().item() - 1]
     assert batch["labels"][0, :prompt_length].tolist() == [-100] * prompt_length
-    assert all(label != -100 for label in batch["labels"][0, prompt_length:].tolist())
+    assert all(label != -100 for label in batch["labels"][0, prompt_length:-1].tolist())
+    assert batch["labels"][0, -1].item() == -100
+
+
+def test_sft_collator_strips_terminal_marker_from_labels() -> None:
+    record = {
+        "input_text": "input",
+        "target_text": "target<|emotion|>003<|/emotion|>",
+        "input_latent_id": 2,
+        "target_latent_id": 3,
+    }
+    item = EmotionSFTDataset([record])[0]
+    tokenizer = TinyTokenizer()
+    collator = EmotionSFTDataCollator(tokenizer, max_seq_length=128)
+
+    batch = collator([item])
+
+    marker_ids = tokenizer("<|emotion|>003<|/emotion|>")["input_ids"]
+    label_ids = [int(value) for value in batch["labels"][0].tolist() if int(value) != -100]
+    assert label_ids[-1] == tokenizer.eos_token_id
+    assert not any(
+        label_ids[index : index + len(marker_ids)] == marker_ids
+        for index in range(len(label_ids))
+    )
 
 
 def test_latent_marker_accuracy() -> None:

@@ -19,7 +19,11 @@ def load_tokenizer(config: ExperimentConfig):
         tokenizer_id,
         trust_remote_code=config.model.trust_remote_code,
     )
-    add_latent_special_tokens(tokenizer, config.soft_prompt.latent_marker_template)
+    add_latent_special_tokens(
+        tokenizer,
+        config.soft_prompt.latent_marker_template,
+        anchor_token=config.latent_training.anchor_token,
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -65,7 +69,14 @@ def build_soft_prompt_model(config: ExperimentConfig) -> tuple[SoftPromptCausalL
         init_strategy=config.soft_prompt.init_strategy,
         token_embedding=token_embedding,
     )
-    return SoftPromptCausalLM(base_model, soft_prompt), tokenizer
+    return SoftPromptCausalLM(
+        base_model,
+        soft_prompt,
+        latent_loss_weight=config.latent_training.loss_weight,
+        latent_target=config.latent_training.target,
+        detach_latent_target=config.latent_training.detach_target,
+        normalize_latent_loss=config.latent_training.normalize,
+    ), tokenizer
 
 
 def load_soft_prompt_model_from_checkpoint(
@@ -86,7 +97,16 @@ def load_soft_prompt_model_from_checkpoint(
         base_model = load_base_model(config)
     base_model.resize_token_embeddings(len(tokenizer))
     soft_prompt = load_soft_prompt(checkpoint_path / "soft_prompt.pt")
-    return SoftPromptCausalLM(base_model, soft_prompt), tokenizer
+    model = SoftPromptCausalLM(
+        base_model,
+        soft_prompt,
+        latent_loss_weight=config.latent_training.loss_weight,
+        latent_target=config.latent_training.target,
+        detach_latent_target=config.latent_training.detach_target,
+        normalize_latent_loss=config.latent_training.normalize,
+    )
+    model.load_latent_head(checkpoint_path / "latent_head.pt")
+    return model, tokenizer
 
 
 def load_saved_base_model(model_dir: str | Path, config: ExperimentConfig):

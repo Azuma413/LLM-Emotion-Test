@@ -10,6 +10,14 @@ model:
     - k_proj
     - v_proj
     - o_proj
+latent_training:
+  mode: regression
+  loss_weight: 1.0
+  target: soft_prompt_mean
+  detach_target: true
+  normalize: true
+  anchor_token: "<|latent_pred|>"
+  auxiliary_classification_weight: 0.0
 training:
   learning_rate: 0.000001
   batch_size: 1

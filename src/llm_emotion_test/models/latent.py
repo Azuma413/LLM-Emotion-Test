@@ -91,6 +91,31 @@ def parse_latent_id(
     raise ValueError("Generated text does not contain a valid latent marker")
 
 
-def add_latent_special_tokens(tokenizer, marker_template: str) -> int:
+def strip_terminal_latent_marker(
+    text: str,
+    *,
+    marker_template: str = "<|emotion|>{latent_id:03d}<|/emotion|>",
+) -> str:
+    """Remove a latent marker only when it is the final protocol suffix."""
+
     spec = LatentMarkerSpec(marker_template)
-    return tokenizer.add_special_tokens({"additional_special_tokens": spec.special_tokens})
+    matches = list(spec.pattern().finditer(text))
+    if not matches:
+        return text
+    match = matches[-1]
+    if text[match.end() :].strip():
+        return text
+    return text[: match.start()].rstrip()
+
+
+def add_latent_special_tokens(
+    tokenizer,
+    marker_template: str,
+    *,
+    anchor_token: str | None = None,
+) -> int:
+    spec = LatentMarkerSpec(marker_template)
+    tokens = list(spec.special_tokens)
+    if anchor_token is not None:
+        tokens.append(anchor_token)
+    return tokenizer.add_special_tokens({"additional_special_tokens": tokens})

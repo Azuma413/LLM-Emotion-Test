@@ -5,6 +5,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import torch
+
 from llm_emotion_test.models.latent import LatentMarkerSpec, parse_latent_id
 from llm_emotion_test.tasks.hidden_constraints import (
     Code,
@@ -74,6 +76,7 @@ class LLMNegotiationAgent:
         agent_id: str,
         num_latents: int,
         marker_template: str,
+        anchor_token: str = "<|latent_pred|>",
         generation_max_new_tokens: int = 128,
         fallback: str = "previous",
         neutral_latent_id: int = 0,
@@ -83,6 +86,7 @@ class LLMNegotiationAgent:
         self.agent_id = agent_id
         self.num_latents = num_latents
         self.marker_template = marker_template
+        self.anchor_token = anchor_token
         self.generation_max_new_tokens = generation_max_new_tokens
         self.fallback = fallback
         self.neutral_latent_id = neutral_latent_id
@@ -107,14 +111,45 @@ class LLMNegotiationAgent:
             pad_token_id=self.tokenizer.pad_token_id,
         )
         generated_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=False)
-        return parse_agent_action(
-            generated_text,
-            previous_latent_id=current_latent_id,
-            num_latents=self.num_latents,
-            marker_template=self.marker_template,
-            fallback=self.fallback,
-            neutral_latent_id=self.neutral_latent_id,
+        predicted_latent_id = self._predict_next_latent_id(
+            prompt + generated_text,
+            current_latent_id=current_latent_id,
         )
+        raw_text = generated_text + LatentMarkerSpec(self.marker_template).format(
+            predicted_latent_id
+        )
+        return AgentAction(
+            message_text=strip_protocol_markers(raw_text, marker_template=self.marker_template).strip(),
+            next_latent_id=predicted_latent_id,
+            proposal=parse_answer(raw_text),
+            raw_text=raw_text,
+            parse_error=None,
+        )
+
+    @torch.no_grad()
+    def _predict_next_latent_id(self, text: str, *, current_latent_id: int) -> int:
+        import torch
+
+        if not hasattr(self.model, "predict_latent"):
+            return current_latent_id
+        encoded = self.tokenizer(text, add_special_tokens=False)["input_ids"]
+        if hasattr(self.tokenizer, "convert_tokens_to_ids"):
+            anchor_id = self.tokenizer.convert_tokens_to_ids(self.anchor_token)
+        else:
+            anchor_ids = self.tokenizer(self.anchor_token, add_special_tokens=False)["input_ids"]
+            anchor_id = anchor_ids[0]
+        device = next(self.model.parameters()).device
+        input_ids = torch.tensor([list(encoded) + [int(anchor_id)]], device=device, dtype=torch.long)
+        latent_ids = torch.tensor([current_latent_id], device=device, dtype=torch.long)
+        latent_positions = torch.tensor([len(encoded)], device=device, dtype=torch.long)
+        attention_mask = torch.ones_like(input_ids)
+        predicted, _distances = self.model.predict_latent(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            latent_ids=latent_ids,
+            latent_positions=latent_positions,
+        )
+        return int(predicted[0].detach().cpu())
 
 
 class RuleBasedThirdPartyAnswerer:
@@ -207,11 +242,7 @@ def build_agent_prompt(observation: Mapping[str, Any]) -> str:
     lines.append("会話履歴:")
     for item in observation["transcript"]:
         lines.append(f"Agent {item['agent_id']}: {item['action']['message_text']}")
-    lines.extend(
-        [
-            "次の発話では、相手に有用な制約を共有してください。",
-        ]
-    )
+    # lines.append("次の発話では、相手に有用な制約を共有してください。")
     return "\n".join(lines)
 
 

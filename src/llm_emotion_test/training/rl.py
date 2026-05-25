@@ -20,7 +20,8 @@ from llm_emotion_test.agents.negotiation import (
     AgentAction,
     RuleBasedConstraintSharingAgent,
     build_agent_prompt,
-    parse_agent_action,
+    parse_answer,
+    strip_protocol_markers,
 )
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.models.loader import (
@@ -476,20 +477,27 @@ def sample_llm_candidate_group(
     )
     candidates: list[RolloutStep] = []
     for branch_index in range(config.rl_task.rollouts_per_problem):
-        generated_token_ids, generated_text, sample_logprob = generate_llm_action_tokens(
+        (
+            generated_token_ids,
+            generated_text,
+            sample_logprob,
+            predicted_latent_id,
+        ) = generate_llm_action_tokens(
             config,
             model,
             tokenizer,
             prompt_token_ids,
             latent_id=int(observation["current_latent_id"]),
         )
-        action = parse_agent_action(
-            generated_text,
-            previous_latent_id=int(observation["current_latent_id"]),
-            num_latents=config.soft_prompt.num_latents,
-            marker_template=config.soft_prompt.latent_marker_template,
-            fallback=config.soft_prompt.invalid_latent_fallback,
-            neutral_latent_id=config.soft_prompt.neutral_latent_id,
+        action = AgentAction(
+            message_text=strip_protocol_markers(
+                generated_text,
+                marker_template=config.soft_prompt.latent_marker_template,
+            ).strip(),
+            next_latent_id=predicted_latent_id,
+            proposal=parse_answer(generated_text),
+            raw_text=generated_text,
+            parse_error=None,
         )
         team_reward, local_reward, reward_components = score_candidate_action(
             config,
@@ -529,7 +537,7 @@ def generate_llm_action_tokens(
     prompt_token_ids: Sequence[int],
     *,
     latent_id: int,
-) -> tuple[list[int], str, float]:
+) -> tuple[list[int], str, float, int]:
     model.eval()
     device = model_device(model)
     input_ids = torch.tensor([list(prompt_token_ids)], dtype=torch.long, device=device)
@@ -555,6 +563,17 @@ def generate_llm_action_tokens(
     if not generated_ids:
         generated_ids = [tokenizer.eos_token_id or tokenizer.pad_token_id or 0]
     generated_text = tokenizer.decode(generated_ids, skip_special_tokens=False)
+    predicted_latent_id = predict_llm_next_latent_id(
+        config,
+        model,
+        tokenizer,
+        list(prompt_token_ids) + generated_ids,
+        current_latent_id=latent_id,
+    )
+    generated_text_with_marker = (
+        generated_text
+        + config.soft_prompt.latent_marker_template.format(latent_id=predicted_latent_id)
+    )
     logprob = float(
         sequence_logprob(
             model,
@@ -565,7 +584,33 @@ def generate_llm_action_tokens(
         .detach()
         .cpu()
     )
-    return generated_ids, generated_text, logprob
+    return generated_ids, generated_text_with_marker, logprob, predicted_latent_id
+
+
+@torch.no_grad()
+def predict_llm_next_latent_id(
+    config: ExperimentConfig,
+    model,
+    tokenizer,
+    token_ids: Sequence[int],
+    *,
+    current_latent_id: int,
+) -> int:
+    if not hasattr(model, "predict_latent"):
+        return current_latent_id
+    device = model_device(model)
+    anchor_id = token_id(tokenizer, config.latent_training.anchor_token)
+    input_ids = torch.tensor([list(token_ids) + [anchor_id]], dtype=torch.long, device=device)
+    attention_mask = torch.ones_like(input_ids)
+    latent_ids = torch.tensor([current_latent_id], dtype=torch.long, device=device)
+    latent_positions = torch.tensor([len(token_ids)], dtype=torch.long, device=device)
+    predicted, _distances = model.predict_latent(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        latent_ids=latent_ids,
+        latent_positions=latent_positions,
+    )
+    return int(predicted[0].detach().cpu())
 
 
 def update_llm_policy(
@@ -657,6 +702,18 @@ def encode_prompt_ids(tokenizer, prompt: str, *, max_prompt_length: int) -> list
     return [int(token_id) for token_id in token_ids]
 
 
+def token_id(tokenizer, token: str) -> int:
+    if hasattr(tokenizer, "convert_tokens_to_ids"):
+        value = tokenizer.convert_tokens_to_ids(token)
+        unknown = getattr(tokenizer, "unk_token_id", None)
+        if value is not None and value != unknown:
+            return int(value)
+    token_ids = tokenizer(token, add_special_tokens=False)["input_ids"]
+    if len(token_ids) != 1:
+        raise ValueError(f"Token must tokenize to one id, got {len(token_ids)} ids")
+    return int(token_ids[0])
+
+
 def extract_generated_token_ids(
     output_ids: torch.Tensor,
     prompt_ids: torch.Tensor,
@@ -673,13 +730,15 @@ def model_device(model) -> torch.device:
 
 
 def llm_step_to_action(step: RolloutStep, config: ExperimentConfig) -> AgentAction:
-    return parse_agent_action(
-        step.generated_text,
-        previous_latent_id=step.previous_latent_id,
-        num_latents=config.soft_prompt.num_latents,
-        marker_template=config.soft_prompt.latent_marker_template,
-        fallback=config.soft_prompt.invalid_latent_fallback,
-        neutral_latent_id=config.soft_prompt.neutral_latent_id,
+    return AgentAction(
+        message_text=strip_protocol_markers(
+            step.generated_text,
+            marker_template=config.soft_prompt.latent_marker_template,
+        ).strip(),
+        next_latent_id=step.latent_id,
+        proposal=parse_answer(step.generated_text),
+        raw_text=step.generated_text,
+        parse_error=None if not step.parser_failed else "candidate parse failed",
     )
 
 

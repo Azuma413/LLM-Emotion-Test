@@ -272,6 +272,7 @@ def build_llm_variant_agents(
             agent_id=agent_id,
             num_latents=config.soft_prompt.num_latents,
             marker_template=config.soft_prompt.latent_marker_template,
+            anchor_token=config.latent_training.anchor_token,
             generation_max_new_tokens=config.training.generation_max_new_tokens,
             fallback=config.soft_prompt.invalid_latent_fallback,
             neutral_latent_id=config.soft_prompt.neutral_latent_id,

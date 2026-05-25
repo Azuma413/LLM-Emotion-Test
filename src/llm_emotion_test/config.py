@@ -52,6 +52,25 @@ class SoftPromptConfig(BaseModel):
         return value
 
 
+class LatentTrainingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["marker_ce", "regression", "regression_plus_marker_ce"] = "regression"
+    loss_weight: float = Field(default=1.0, ge=0.0)
+    target: Literal["soft_prompt_mean", "soft_prompt_flatten"] = "soft_prompt_mean"
+    detach_target: bool = True
+    normalize: bool = True
+    anchor_token: str = "<|latent_pred|>"
+    auxiliary_classification_weight: float = Field(default=0.0, ge=0.0)
+
+    @field_validator("anchor_token")
+    @classmethod
+    def anchor_token_is_not_empty(cls, value: str) -> str:
+        if not value:
+            raise ValueError("anchor_token must not be empty")
+        return value
+
+
 class DataConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -293,6 +312,7 @@ class ExperimentConfig(BaseModel):
     stage: Literal["base", "sft", "distill", "rl_grpo", "eval"] = "base"
     model: ModelConfig = Field(default_factory=ModelConfig)
     soft_prompt: SoftPromptConfig = Field(default_factory=SoftPromptConfig)
+    latent_training: LatentTrainingConfig = Field(default_factory=LatentTrainingConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     distillation: DistillationConfig = Field(default_factory=DistillationConfig)

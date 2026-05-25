@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 class SoftPromptEmbedding(nn.Module):
@@ -52,10 +54,29 @@ class SoftPromptEmbedding(nn.Module):
 class SoftPromptCausalLM(nn.Module):
     """Causal LM wrapper that prepends learnable latent prompts to token embeddings."""
 
-    def __init__(self, base_model: nn.Module, soft_prompt: SoftPromptEmbedding) -> None:
+    def __init__(
+        self,
+        base_model: nn.Module,
+        soft_prompt: SoftPromptEmbedding,
+        *,
+        latent_loss_weight: float = 1.0,
+        latent_target: str = "soft_prompt_mean",
+        detach_latent_target: bool = True,
+        normalize_latent_loss: bool = True,
+    ) -> None:
         super().__init__()
         self.base_model = base_model
         self.soft_prompt = soft_prompt
+        self.latent_loss_weight = latent_loss_weight
+        self.latent_target = latent_target
+        self.detach_latent_target = detach_latent_target
+        self.normalize_latent_loss = normalize_latent_loss
+        target_size = (
+            soft_prompt.hidden_size
+            if latent_target == "soft_prompt_mean"
+            else soft_prompt.prompt_length * soft_prompt.hidden_size
+        )
+        self.latent_head = nn.Linear(soft_prompt.hidden_size, target_size)
 
     @property
     def config(self):
@@ -74,6 +95,8 @@ class SoftPromptCausalLM(nn.Module):
         latent_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
+        target_latent_ids: torch.Tensor | None = None,
+        latent_positions: torch.Tensor | None = None,
         **kwargs: Any,
     ):
         if input_ids is None:
@@ -109,12 +132,102 @@ class SoftPromptCausalLM(nn.Module):
             )
             labels = torch.cat([prompt_labels, labels], dim=1)
 
-        return self.base_model(
+        needs_latent = target_latent_ids is not None and latent_positions is not None
+        if needs_latent:
+            kwargs["output_hidden_states"] = True
+        outputs = self.base_model(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             labels=labels,
             **kwargs,
         )
+        if not needs_latent:
+            return outputs
+
+        latent_loss, pred_latent = self.compute_latent_loss(
+            outputs=outputs,
+            inputs_embeds=inputs_embeds,
+            target_latent_ids=target_latent_ids,
+            latent_positions=latent_positions,
+        )
+        text_loss = outputs.loss
+        total_loss = latent_loss * self.latent_loss_weight
+        if text_loss is not None:
+            total_loss = text_loss + total_loss
+        return _replace_output_fields(
+            outputs,
+            loss=total_loss,
+            text_loss=text_loss,
+            latent_loss=latent_loss,
+            pred_latent=pred_latent,
+        )
+
+    def compute_latent_loss(
+        self,
+        *,
+        outputs,
+        inputs_embeds: torch.Tensor,
+        target_latent_ids: torch.Tensor,
+        latent_positions: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden_states = getattr(outputs, "hidden_states", None)
+        if hidden_states is not None:
+            final_hidden = hidden_states[-1]
+        else:
+            final_hidden = inputs_embeds
+        shifted_positions = latent_positions.to(final_hidden.device) + self.soft_prompt.prompt_length
+        batch_indices = torch.arange(final_hidden.shape[0], device=final_hidden.device)
+        anchor_hidden = final_hidden[batch_indices, shifted_positions]
+        pred_latent = self.latent_head(anchor_hidden)
+        target = self.soft_prompt(target_latent_ids).to(
+            device=pred_latent.device,
+            dtype=pred_latent.dtype,
+        )
+        if self.latent_target == "soft_prompt_mean":
+            target = target.mean(dim=1)
+        elif self.latent_target == "soft_prompt_flatten":
+            target = target.flatten(start_dim=1)
+        else:
+            raise ValueError(f"Unsupported latent target: {self.latent_target}")
+        if self.detach_latent_target:
+            target = target.detach()
+        pred_for_loss = pred_latent
+        target_for_loss = target
+        if self.normalize_latent_loss:
+            pred_for_loss = F.normalize(pred_for_loss, dim=-1)
+            target_for_loss = F.normalize(target_for_loss, dim=-1)
+        return F.mse_loss(pred_for_loss, target_for_loss), pred_latent
+
+    @torch.no_grad()
+    def predict_latent(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        latent_ids: torch.Tensor,
+        latent_positions: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        outputs = self(
+            input_ids=input_ids,
+            latent_ids=latent_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        )
+        final_hidden = outputs.hidden_states[-1]
+        shifted_positions = latent_positions.to(final_hidden.device) + self.soft_prompt.prompt_length
+        batch_indices = torch.arange(final_hidden.shape[0], device=final_hidden.device)
+        pred_latent = self.latent_head(final_hidden[batch_indices, shifted_positions])
+        codebook = self.soft_prompt.weight.to(device=pred_latent.device, dtype=pred_latent.dtype)
+        if self.latent_target == "soft_prompt_mean":
+            targets = codebook.mean(dim=1)
+        elif self.latent_target == "soft_prompt_flatten":
+            targets = codebook.flatten(start_dim=1)
+        else:
+            raise ValueError(f"Unsupported latent target: {self.latent_target}")
+        pred_compare = F.normalize(pred_latent, dim=-1) if self.normalize_latent_loss else pred_latent
+        target_compare = F.normalize(targets, dim=-1) if self.normalize_latent_loss else targets
+        distances = torch.cdist(pred_compare, target_compare)
+        return distances.argmin(dim=-1), distances.min(dim=-1).values
 
     @torch.no_grad()
     def generate(
@@ -168,6 +281,30 @@ class SoftPromptCausalLM(nn.Module):
         )
         return checkpoint_path
 
+    def save_latent_head(self, output_dir: str | Path) -> Path:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = output_path / "latent_head.pt"
+        torch.save(
+            {
+                "state_dict": self.latent_head.state_dict(),
+                "latent_loss_weight": self.latent_loss_weight,
+                "latent_target": self.latent_target,
+                "detach_latent_target": self.detach_latent_target,
+                "normalize_latent_loss": self.normalize_latent_loss,
+            },
+            checkpoint_path,
+        )
+        return checkpoint_path
+
+    def load_latent_head(self, checkpoint_path: str | Path) -> bool:
+        path = Path(checkpoint_path)
+        if not path.exists():
+            return False
+        payload = torch.load(path, map_location="cpu")
+        self.latent_head.load_state_dict(payload["state_dict"])
+        return True
+
     def save_checkpoint(
         self,
         output_dir: str | Path,
@@ -179,6 +316,7 @@ class SoftPromptCausalLM(nn.Module):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         self.save_soft_prompt(output_path)
+        self.save_latent_head(output_path)
         self.base_model.save_pretrained(
             output_path / "base_or_adapter",
             safe_serialization=False,
@@ -199,6 +337,7 @@ class SoftPromptCausalLM(nn.Module):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         self.save_soft_prompt(output_path)
+        self.save_latent_head(output_path)
         if hasattr(self.base_model, "save_pretrained"):
             kwargs["safe_serialization"] = False
             self.base_model.save_pretrained(output_path / "base_or_adapter", **kwargs)
@@ -214,3 +353,13 @@ def load_soft_prompt(checkpoint_path: str | Path) -> SoftPromptEmbedding:
     )
     soft_prompt.load_state_dict(payload["state_dict"])
     return soft_prompt
+
+
+def _replace_output_fields(outputs, **fields: Any):
+    if hasattr(outputs, "to_tuple"):
+        values = dict(outputs.items())
+        values.update(fields)
+        return SimpleNamespace(**values)
+    for key, value in fields.items():
+        setattr(outputs, key, value)
+    return outputs
