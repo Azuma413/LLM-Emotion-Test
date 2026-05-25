@@ -50,17 +50,17 @@ data:
   seed: 42
 training:
   learning_rate: 0.00002
-  batch_size: 1
-  gradient_accumulation_steps: 8
+  batch_size: 32
+  gradient_accumulation_steps: 2
   max_steps:
   max_seq_length: 1024
   precision: bf16
-  logging_steps: 50
+  logging_steps: 10
   eval_steps: 500
   save_steps: 500
   warmup_steps: 100
   weight_decay: 0.01
-  num_train_epochs: 3.0
+  num_train_epochs: 4.0
   eval_max_samples: 16
   sample_count: 8
   generation_max_new_tokens: 128

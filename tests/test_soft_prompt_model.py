@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from torch import nn
+from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from llm_emotion_test.models.latent import LatentMarkerSpec, parse_latent_id
 from llm_emotion_test.models.soft_prompt import (
@@ -61,6 +62,27 @@ class DummyCausalLM(nn.Module):
         (Path(output_dir) / "dummy.txt").write_text("saved", encoding="utf-8")
 
 
+class ModelOutputDummyCausalLM(DummyCausalLM):
+    def forward(
+        self,
+        *,
+        inputs_embeds,
+        attention_mask=None,
+        labels=None,
+        output_hidden_states=False,
+        **_kwargs,
+    ):
+        self.last_inputs_embeds_shape = tuple(inputs_embeds.shape)
+        logits = self.head(inputs_embeds)
+        loss = logits.sum() * 0 if labels is not None else None
+        hidden_states = (inputs_embeds,) if output_hidden_states else None
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            hidden_states=hidden_states,
+        )
+
+
 def test_soft_prompt_forward_prepends_prompt_embeddings() -> None:
     base_model = DummyCausalLM()
     soft_prompt = SoftPromptEmbedding(
@@ -105,6 +127,30 @@ def test_soft_prompt_forward_returns_latent_loss() -> None:
     assert output.latent_loss is not None
     assert output.pred_latent.shape == (1, 8)
     assert output.loss is not None
+
+
+def test_soft_prompt_forward_preserves_model_output_indexing() -> None:
+    base_model = ModelOutputDummyCausalLM()
+    soft_prompt = SoftPromptEmbedding(
+        num_latents=3,
+        prompt_length=4,
+        hidden_size=8,
+        init_strategy="zeros",
+    )
+    model = SoftPromptCausalLM(base_model, soft_prompt)
+
+    output = model(
+        input_ids=torch.tensor([[1, 2, 3, 4]]),
+        latent_ids=torch.tensor([0]),
+        labels=torch.tensor([[-100, 2, 3, -100]]),
+        target_latent_ids=torch.tensor([2]),
+        latent_positions=torch.tensor([3]),
+    )
+
+    assert output[0] is output.loss
+    assert output[1].shape == (1, 8, 16)
+    assert output.text_loss is not None
+    assert output.latent_loss is not None
 
 
 def test_latent_marker_parser_extracts_last_valid_marker() -> None:

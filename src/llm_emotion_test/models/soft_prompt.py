@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from types import SimpleNamespace
 
 import torch
 from torch import nn
@@ -356,10 +355,6 @@ def load_soft_prompt(checkpoint_path: str | Path) -> SoftPromptEmbedding:
 
 
 def _replace_output_fields(outputs, **fields: Any):
-    if hasattr(outputs, "to_tuple"):
-        values = dict(outputs.items())
-        values.update(fields)
-        return SimpleNamespace(**values)
     for key, value in fields.items():
         setattr(outputs, key, value)
     return outputs

@@ -187,7 +187,7 @@ def build_training_arguments(config: ExperimentConfig) -> TrainingArguments:
         "bf16": config.training.precision == "bf16",
         "fp16": config.training.precision == "fp16",
         "ddp_find_unused_parameters": False,
-        "ddp_static_graph": True,
+        "ddp_static_graph": False,
     }
     if config.training.max_steps is not None:
         kwargs["max_steps"] = config.training.max_steps

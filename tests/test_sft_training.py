@@ -95,7 +95,7 @@ def test_latent_marker_accuracy() -> None:
     assert latent_marker_accuracy(samples) == 0.5
 
 
-def test_training_arguments_disable_ddp_unused_parameter_search() -> None:
+def test_training_arguments_use_regular_ddp_graph() -> None:
     args = build_training_arguments(
         ExperimentConfig.model_validate(
             {
@@ -108,4 +108,4 @@ def test_training_arguments_disable_ddp_unused_parameter_search() -> None:
     )
 
     assert args.ddp_find_unused_parameters is False
-    assert args.ddp_static_graph is True
+    assert args.ddp_static_graph is False
