@@ -80,7 +80,7 @@ def test_parse_agent_action_records_marker_failure_with_fallback() -> None:
     assert action.parse_error is not None
 
 
-def test_agent_prompt_only_asks_for_constraint_sharing() -> None:
+def test_agent_prompt_hides_answer_and_latent_protocol() -> None:
     problem = generate_hidden_constraint_problem(RLTaskConfig(max_generation_attempts=500), seed=123)
     prompt = build_agent_prompt(
         {
@@ -91,7 +91,6 @@ def test_agent_prompt_only_asks_for_constraint_sharing() -> None:
         }
     )
 
-    assert "有用な制約を共有" in prompt
     assert "<answer>" not in prompt
     assert "<|emotion|>" not in prompt
     assert "latent" not in prompt

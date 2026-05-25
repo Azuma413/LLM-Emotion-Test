@@ -29,15 +29,24 @@ def load_tokenizer(config: ExperimentConfig):
     return tokenizer
 
 
-def load_base_model(config: ExperimentConfig, *, apply_adapters: bool = True):
+_DEFAULT_DEVICE_MAP = object()
+
+
+def load_base_model(
+    config: ExperimentConfig,
+    *,
+    apply_adapters: bool = True,
+    device_map: str | dict[str, Any] | None | object = _DEFAULT_DEVICE_MAP,
+):
     kwargs: dict[str, Any] = {
         "trust_remote_code": config.model.trust_remote_code,
     }
-    if config.model.device_map is not None:
-        kwargs["device_map"] = config.model.device_map
+    resolved_device_map = (
+        config.model.device_map if device_map is _DEFAULT_DEVICE_MAP else device_map
+    )
+    if resolved_device_map is not None:
+        kwargs["device_map"] = resolved_device_map
     dtype = resolve_torch_dtype(config.model.torch_dtype)
-    if dtype is not None:
-        kwargs["torch_dtype"] = dtype
     if config.model.use_qlora:
         kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -45,6 +54,7 @@ def load_base_model(config: ExperimentConfig, *, apply_adapters: bool = True):
             bnb_4bit_compute_dtype=dtype or torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
+    set_model_dtype_kwarg(kwargs, dtype)
 
     model = AutoModelForCausalLM.from_pretrained(config.model.base_model, **kwargs)
     if config.model.use_qlora:
@@ -54,10 +64,14 @@ def load_base_model(config: ExperimentConfig, *, apply_adapters: bool = True):
     return model
 
 
-def build_soft_prompt_model(config: ExperimentConfig) -> tuple[SoftPromptCausalLM, Any]:
+def build_soft_prompt_model(
+    config: ExperimentConfig,
+    *,
+    device_map: str | dict[str, Any] | None | object = _DEFAULT_DEVICE_MAP,
+) -> tuple[SoftPromptCausalLM, Any]:
     require_cuda_if_configured(config)
     tokenizer = load_tokenizer(config)
-    base_model = load_base_model(config)
+    base_model = load_base_model(config, device_map=device_map)
     base_model.resize_token_embeddings(len(tokenizer))
 
     hidden_size = get_hidden_size(base_model)
@@ -82,19 +96,29 @@ def build_soft_prompt_model(config: ExperimentConfig) -> tuple[SoftPromptCausalL
 def load_soft_prompt_model_from_checkpoint(
     checkpoint_dir: str | Path,
     config: ExperimentConfig,
+    *,
+    device_map: str | dict[str, Any] | None | object = _DEFAULT_DEVICE_MAP,
 ) -> tuple[SoftPromptCausalLM, Any]:
     require_cuda_if_configured(config)
     checkpoint_path = Path(checkpoint_dir)
     tokenizer = load_tokenizer(config)
     saved_model_path = checkpoint_path / "base_or_adapter"
     if (saved_model_path / "adapter_config.json").exists():
-        base_model = load_base_model(config, apply_adapters=False)
+        base_model = load_base_model(
+            config,
+            apply_adapters=False,
+            device_map=device_map,
+        )
         base_model.resize_token_embeddings(len(tokenizer))
         base_model = PeftModel.from_pretrained(base_model, saved_model_path)
     elif saved_model_path.exists():
-        base_model = load_saved_base_model(saved_model_path, config)
+        base_model = load_saved_base_model(
+            saved_model_path,
+            config,
+            device_map=device_map,
+        )
     else:
-        base_model = load_base_model(config)
+        base_model = load_base_model(config, device_map=device_map)
     base_model.resize_token_embeddings(len(tokenizer))
     soft_prompt = load_soft_prompt(checkpoint_path / "soft_prompt.pt")
     model = SoftPromptCausalLM(
@@ -109,15 +133,22 @@ def load_soft_prompt_model_from_checkpoint(
     return model, tokenizer
 
 
-def load_saved_base_model(model_dir: str | Path, config: ExperimentConfig):
+def load_saved_base_model(
+    model_dir: str | Path,
+    config: ExperimentConfig,
+    *,
+    device_map: str | dict[str, Any] | None | object = _DEFAULT_DEVICE_MAP,
+):
     kwargs: dict[str, Any] = {
         "trust_remote_code": config.model.trust_remote_code,
     }
-    if config.model.device_map is not None:
-        kwargs["device_map"] = config.model.device_map
+    resolved_device_map = (
+        config.model.device_map if device_map is _DEFAULT_DEVICE_MAP else device_map
+    )
+    if resolved_device_map is not None:
+        kwargs["device_map"] = resolved_device_map
     dtype = resolve_torch_dtype(config.model.torch_dtype)
-    if dtype is not None:
-        kwargs["torch_dtype"] = dtype
+    set_model_dtype_kwarg(kwargs, dtype)
     return AutoModelForCausalLM.from_pretrained(model_dir, **kwargs)
 
 
@@ -131,6 +162,11 @@ def resolve_torch_dtype(value: str) -> torch.dtype | None:
     if value == "bfloat16":
         return torch.bfloat16
     raise ValueError(f"Unsupported torch dtype: {value}")
+
+
+def set_model_dtype_kwarg(kwargs: dict[str, Any], dtype: torch.dtype | None) -> None:
+    if dtype is not None:
+        kwargs["dtype"] = dtype
 
 
 def require_cuda_if_configured(config: ExperimentConfig) -> None:

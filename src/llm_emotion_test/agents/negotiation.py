@@ -181,7 +181,7 @@ class LLMThirdPartyAnswerer:
     def __init__(self, config) -> None:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from llm_emotion_test.models.loader import resolve_torch_dtype
+        from llm_emotion_test.models.loader import resolve_torch_dtype, set_model_dtype_kwarg
 
         tokenizer_id = config.rl_task.third_party_tokenizer or config.rl_task.third_party_model
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -196,8 +196,7 @@ class LLMThirdPartyAnswerer:
         if config.rl_task.third_party_device_map is not None:
             kwargs["device_map"] = config.rl_task.third_party_device_map
         dtype = resolve_torch_dtype(config.rl_task.third_party_torch_dtype)
-        if dtype is not None:
-            kwargs["torch_dtype"] = dtype
+        set_model_dtype_kwarg(kwargs, dtype)
         self.model = AutoModelForCausalLM.from_pretrained(
             config.rl_task.third_party_model,
             **kwargs,
@@ -242,7 +241,6 @@ def build_agent_prompt(observation: Mapping[str, Any]) -> str:
     lines.append("会話履歴:")
     for item in observation["transcript"]:
         lines.append(f"Agent {item['agent_id']}: {item['action']['message_text']}")
-    # lines.append("次の発話では、相手に有用な制約を共有してください。")
     return "\n".join(lines)
 
 

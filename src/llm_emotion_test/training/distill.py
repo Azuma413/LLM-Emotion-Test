@@ -17,6 +17,7 @@ from llm_emotion_test.models.loader import (
     require_cuda_if_configured,
     resolve_torch_dtype,
     save_model_checkpoint,
+    set_model_dtype_kwarg,
 )
 from llm_emotion_test.training.sft import (
     EmotionSFTDataCollator,
@@ -123,9 +124,10 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
         model, tokenizer = load_soft_prompt_model_from_checkpoint(
             config.distillation.student_checkpoint_dir,
             config,
+            device_map=None,
         )
     else:
-        model, tokenizer = build_soft_prompt_model(config)
+        model, tokenizer = build_soft_prompt_model(config, device_map=None)
     collator = EmotionSFTDataCollator(
         tokenizer=tokenizer,
         max_seq_length=config.training.max_seq_length,
@@ -148,19 +150,23 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
     train_result = trainer.train()
     eval_metrics = trainer.evaluate()
 
-    final_checkpoint = save_model_checkpoint(
-        model,
-        tokenizer,
-        config,
-        config.output.checkpoints_dir / "final",
-    )
-    samples = generate_sft_samples(
-        model,
-        tokenizer,
-        eval_records[: config.training.sample_count],
-        config=config,
-    )
-    write_jsonl(samples, config.output.samples_path)
+    final_checkpoint = config.output.checkpoints_dir / "final"
+    samples: list[dict[str, Any]] = []
+    if trainer.is_world_process_zero():
+        unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+        final_checkpoint = save_model_checkpoint(
+            unwrapped_model,
+            tokenizer,
+            config,
+            final_checkpoint,
+        )
+        samples = generate_sft_samples(
+            unwrapped_model,
+            tokenizer,
+            eval_records[: config.training.sample_count],
+            config=config,
+        )
+        write_jsonl(samples, config.output.samples_path)
 
     metrics = {
         "distillation": distill_stats,
@@ -174,7 +180,8 @@ def train_distill(config: ExperimentConfig) -> dict[str, Any]:
         "text_loss": trainer.last_text_loss,
         "latent_loss": trainer.last_latent_loss,
     }
-    write_jsonl([metrics], config.output.metrics_path)
+    if trainer.is_world_process_zero():
+        write_jsonl([metrics], config.output.metrics_path)
     return metrics
 
 
@@ -185,8 +192,7 @@ def build_kl_teacher_model(config: ExperimentConfig, tokenizer):
     if config.distillation.teacher_device_map is not None:
         kwargs["device_map"] = config.distillation.teacher_device_map
     dtype = resolve_torch_dtype(config.distillation.teacher_torch_dtype)
-    if dtype is not None:
-        kwargs["torch_dtype"] = dtype
+    set_model_dtype_kwarg(kwargs, dtype)
     teacher = AutoModelForCausalLM.from_pretrained(
         config.distillation.teacher_model,
         **kwargs,

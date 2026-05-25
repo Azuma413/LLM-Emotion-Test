@@ -26,11 +26,25 @@ uv run llm-emotion-test train-sft --config configs/sft.yaml
 
 入力 soft prompt と WRIME 文 prefix から continuation を生成する SFT を実行し、`outputs/runs/<run_id>/checkpoints/` に checkpoint を保存する。標準の `latent_training.mode: regression` では、本文 token には CE loss を掛け、本文末尾の `<|latent_pred|>` anchor の hidden state から `target_latent_id` に対応する soft prompt 表現へ回帰する。
 標準設定では `outputs/runs/sft/checkpoints/final` が後続の自己蒸留の初期モデルになる。
+GPU index は `CUDA_VISIBLE_DEVICES` で指定する。たとえば物理GPU 2と3だけを使う場合は `CUDA_VISIBLE_DEVICES=2,3` とする。このリポジトリでは短い実行スクリプトも用意している。
+
+```bash
+GPUS=2,3 scripts/sft.sh
+```
+
+`GPUS` に複数indexを指定すると、SFT/蒸留は学習プロセスごとにモデル全体を1 GPUへ載せる DDP 起動になる。別configを使う場合は `GPUS=0 scripts/sft.sh configs/sft.yaml` のように第1引数へ渡す。
+`model.device_map: auto` は評価や生成時のモデル分割には使えるが、SFT/蒸留の学生モデル学習では `Trainer` の配置処理と衝突しやすいため、学習コード側で無効化される。
 
 ## 3. 自己蒸留
 
 ```bash
 uv run llm-emotion-test distill --config configs/distill.yaml
+```
+
+短いスクリプトで実行する場合:
+
+```bash
+GPUS=2,3 scripts/distil.sh
 ```
 
 教師モデルの感情指示付き応答を生成またはキャッシュから再利用し、学生モデルを教師出力へ合わせて学習する。教師モデルは latent marker を生成せず、学生用 JSONL の target にだけルールベースで latent marker を付与する。蒸留学習では学生の本文 CE、`student_target_latent_id` への latent regression loss、設定値が正なら teacher logits への KL loss を同時に使う。教師生成のキャッシュ、蒸留 JSONL、学生用 JSONL は run directory に保存される。
@@ -42,6 +56,12 @@ GPU LLM run:
 
 ```bash
 uv run llm-emotion-test train-rl --config configs/rl_grpo.yaml
+```
+
+短いスクリプトで実行する場合:
+
+```bash
+GPUS=2 scripts/grpo.sh
 ```
 
 標準設定では `rl_task.policy_backend: llm` と `rl_task.resume_from_checkpoint: outputs/runs/distill/checkpoints/final` を使い、蒸留後の soft prompt モデルを AT-GRPO の初期 policy としてロードする。LLM agent の次 latent は生成文中の marker parse ではなく latent head の nearest latent から決め、transcript 用の raw text に互換 marker を付与する。`configs/rl_grpo.yaml` の `rl_task.policy_backend` を `tabular_smoke` にすると、LLM 推論なしで交渉環境、rollout buffer、turn-wise grouped advantage、checkpoint 保存を確認できる。
@@ -86,12 +106,10 @@ uv run llm-emotion-test evaluate --config configs/eval.yaml
 ## 6. フル GPU パイプライン実行
 
 ```bash
-uv run pytest
 uv run llm-emotion-test prepare-data --config configs/sft.yaml
-uv run llm-emotion-test train-sft --config configs/sft.yaml
-uv run llm-emotion-test distill --config configs/distill.yaml
-uv run llm-emotion-test train-rl --config configs/rl_grpo.yaml
-uv run llm-emotion-test evaluate --config configs/eval.yaml
+GPUS=0,1,2 scripts/sft.sh
+GPUS=0,1 scripts/distil.sh
+GPUS=0 scripts/grpo.sh
 ```
 
 この一括実行は smoke backend ではなく、SFT、SFT checkpoint からの Distill、Distill checkpoint からの LLM AT-GRPO を順に実行する。標準 config は全データと `num_train_epochs` / `num_episodes` / `num_tasks` に基づいて実行するため、短時間確認では各 config のサンプル数やステップ数を明示的に小さくする。

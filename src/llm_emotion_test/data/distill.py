@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llm_emotion_test.config import ExperimentConfig
 from llm_emotion_test.data.wrime import build_label_to_id, format_latent_marker
-from llm_emotion_test.models.loader import resolve_torch_dtype
+from llm_emotion_test.models.loader import resolve_torch_dtype, set_model_dtype_kwarg
 
 
 TeacherGenerator = Callable[[Sequence[str]], Sequence[str]]
@@ -303,8 +303,7 @@ class HuggingFaceTeacherGenerator:
         if config.distillation.teacher_device_map is not None:
             kwargs["device_map"] = config.distillation.teacher_device_map
         dtype = resolve_torch_dtype(config.distillation.teacher_torch_dtype)
-        if dtype is not None:
-            kwargs["torch_dtype"] = dtype
+        set_model_dtype_kwarg(kwargs, dtype)
         self.model = AutoModelForCausalLM.from_pretrained(
             config.distillation.teacher_model,
             **kwargs,

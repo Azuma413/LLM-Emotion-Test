@@ -3,9 +3,11 @@ from __future__ import annotations
 from llm_emotion_test.training.sft import (
     EmotionSFTDataCollator,
     EmotionSFTDataset,
+    build_training_arguments,
     build_sft_prompt,
     latent_marker_accuracy,
 )
+from llm_emotion_test.config import ExperimentConfig
 
 
 class TinyTokenizer:
@@ -91,3 +93,19 @@ def test_latent_marker_accuracy() -> None:
     ]
 
     assert latent_marker_accuracy(samples) == 0.5
+
+
+def test_training_arguments_disable_ddp_unused_parameter_search() -> None:
+    args = build_training_arguments(
+        ExperimentConfig.model_validate(
+            {
+                "training": {
+                    "max_steps": 1,
+                    "report_to": "none",
+                },
+            }
+        )
+    )
+
+    assert args.ddp_find_unused_parameters is False
+    assert args.ddp_static_graph is True

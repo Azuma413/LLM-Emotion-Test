@@ -185,6 +185,8 @@ def build_training_arguments(config: ExperimentConfig) -> TrainingArguments:
         "remove_unused_columns": False,
         "bf16": config.training.precision == "bf16",
         "fp16": config.training.precision == "fp16",
+        "ddp_find_unused_parameters": False,
+        "ddp_static_graph": True,
     }
     if config.training.max_steps is not None:
         kwargs["max_steps"] = config.training.max_steps
@@ -250,7 +252,7 @@ def train_sft(config: ExperimentConfig) -> dict[str, Any]:
     if not eval_records:
         eval_records = train_records[: min(len(train_records), config.training.eval_max_samples)]
 
-    model, tokenizer = build_soft_prompt_model(config)
+    model, tokenizer = build_soft_prompt_model(config, device_map=None)
     collator = EmotionSFTDataCollator(
         tokenizer=tokenizer,
         max_seq_length=config.training.max_seq_length,
@@ -268,19 +270,23 @@ def train_sft(config: ExperimentConfig) -> dict[str, Any]:
     train_result = trainer.train()
     eval_metrics = trainer.evaluate()
 
-    final_checkpoint = save_model_checkpoint(
-        model,
-        tokenizer,
-        config,
-        config.output.checkpoints_dir / "final",
-    )
-    samples = generate_sft_samples(
-        model,
-        tokenizer,
-        eval_records[: config.training.sample_count],
-        config=config,
-    )
-    write_jsonl(samples, config.output.samples_path)
+    final_checkpoint = config.output.checkpoints_dir / "final"
+    samples: list[dict[str, Any]] = []
+    if trainer.is_world_process_zero():
+        unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+        final_checkpoint = save_model_checkpoint(
+            unwrapped_model,
+            tokenizer,
+            config,
+            final_checkpoint,
+        )
+        samples = generate_sft_samples(
+            unwrapped_model,
+            tokenizer,
+            eval_records[: config.training.sample_count],
+            config=config,
+        )
+        write_jsonl(samples, config.output.samples_path)
 
     metrics = {
         "train": dict(train_result.metrics),
@@ -291,7 +297,8 @@ def train_sft(config: ExperimentConfig) -> dict[str, Any]:
         "text_loss": trainer.last_text_loss,
         "latent_loss": trainer.last_latent_loss,
     }
-    write_jsonl([metrics], config.output.metrics_path)
+    if trainer.is_world_process_zero():
+        write_jsonl([metrics], config.output.metrics_path)
     return metrics
 
 
