@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import statistics
 from copy import deepcopy
@@ -35,6 +36,30 @@ from llm_emotion_test.tasks.negotiation_env import (
     write_transcripts,
 )
 from llm_emotion_test.training.sft import write_jsonl
+
+
+def init_wandb_run(config: ExperimentConfig):
+    if config.training.report_to != "wandb":
+        return None
+    import wandb
+
+    return wandb.init(
+        project=os.environ.get("WANDB_PROJECT", "llm-emotion-test"),
+        name=config.experiment_name,
+        config=config.model_dump(mode="json"),
+    )
+
+
+def log_wandb_metrics(run, metrics: Mapping[str, Any], *, step: int | None = None) -> None:
+    if run is None:
+        return
+    scalar_metrics = {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(value, int | float | bool) and not isinstance(value, bool)
+    }
+    if scalar_metrics:
+        run.log(scalar_metrics, step=step)
 
 
 @dataclass(frozen=True)
@@ -187,98 +212,125 @@ def train_at_grpo_llm(config: ExperimentConfig) -> dict[str, Any]:
         yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    wandb_run = init_wandb_run(config)
 
-    model, tokenizer = load_or_create_rl_model(config)
-    configure_rl_trainable_parameters(model, config)
-    optimizer = torch.optim.AdamW(
-        [parameter for parameter in model.parameters() if parameter.requires_grad],
-        lr=config.training.learning_rate,
-        weight_decay=config.training.weight_decay,
-    )
-    start_episode = load_llm_rl_state(config, optimizer)
+    try:
+        model, tokenizer = load_or_create_rl_model(config)
+        configure_rl_trainable_parameters(model, config)
+        optimizer = torch.optim.AdamW(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            lr=config.training.learning_rate,
+            weight_decay=config.training.weight_decay,
+        )
+        start_episode = load_llm_rl_state(config, optimizer)
 
-    baseline_metrics = evaluate_llm_policy(config, model, tokenizer, seed_offset=10_000)
-    fixed_baseline_metrics = evaluate_fixed_baseline(config, seed_offset=30_000)
-    all_transcripts: list[dict[str, Any]] = []
-    buffer = RolloutBuffer()
-    losses: list[float] = []
+        baseline_metrics = evaluate_llm_policy(config, model, tokenizer, seed_offset=10_000)
+        fixed_baseline_metrics = evaluate_fixed_baseline(config, seed_offset=30_000)
+        log_wandb_metrics(
+            wandb_run,
+            {
+                "pre_success_rate": baseline_metrics["success_rate"],
+                "pre_mean_total_reward": baseline_metrics["mean_total_reward"],
+                "fixed_baseline_success_rate": fixed_baseline_metrics["success_rate"],
+                "fixed_baseline_mean_total_reward": fixed_baseline_metrics["mean_total_reward"],
+            },
+            step=start_episode,
+        )
+        all_transcripts: list[dict[str, Any]] = []
+        buffer = RolloutBuffer()
+        losses: list[float] = []
 
-    for episode_index in range(start_episode, config.rl_task.num_episodes):
-        if config.training.max_steps is not None and episode_index >= config.training.max_steps:
-            break
-        rollout = run_llm_tree_rollout(
-            config,
+        for episode_index in range(start_episode, config.rl_task.num_episodes):
+            if config.training.max_steps is not None and episode_index >= config.training.max_steps:
+                break
+            rollout = run_llm_tree_rollout(
+                config,
+                model,
+                tokenizer,
+                episode_index=episode_index,
+                problem_seed=config.runtime.seed + episode_index,
+            )
+            steps = rollout["steps"]
+            loss = update_llm_policy(
+                config,
+                model,
+                tokenizer,
+                optimizer,
+                steps,
+            )
+            losses.append(loss)
+            buffer.extend(steps)
+            all_transcripts.append(rollout["transcript"])
+            log_wandb_metrics(
+                wandb_run,
+                {
+                    "episode": episode_index + 1,
+                    "policy_loss": loss,
+                    "total_reward": rollout["transcript"].get("total_reward", 0.0),
+                    "success": float(bool(rollout["transcript"].get("success", False))),
+                    "num_rollout_steps": len(steps),
+                },
+                step=episode_index + 1,
+            )
+            episode_checkpoint = save_model_checkpoint(
+                model,
+                tokenizer,
+                config,
+                config.output.checkpoints_dir / f"episode-{episode_index + 1:06d}",
+            )
+            save_llm_rl_state(episode_checkpoint, optimizer, episode_index=episode_index + 1)
+
+        final_checkpoint = save_model_checkpoint(
             model,
             tokenizer,
-            episode_index=episode_index,
-            problem_seed=config.runtime.seed + episode_index,
-        )
-        steps = rollout["steps"]
-        loss = update_llm_policy(
             config,
-            model,
-            tokenizer,
-            optimizer,
-            steps,
+            config.output.checkpoints_dir / "final",
         )
-        losses.append(loss)
-        buffer.extend(steps)
-        all_transcripts.append(rollout["transcript"])
-        episode_checkpoint = save_model_checkpoint(
-            model,
-            tokenizer,
-            config,
-            config.output.checkpoints_dir / f"episode-{episode_index + 1:06d}",
-        )
-        save_llm_rl_state(episode_checkpoint, optimizer, episode_index=episode_index + 1)
+        save_llm_rl_state(final_checkpoint, optimizer, episode_index=len(all_transcripts) + start_episode)
+        transcript_path = config.output.run_dir / config.rl_task.transcript_filename
+        write_transcripts(all_transcripts, transcript_path)
+        rollout_buffer_path = config.output.run_dir / "rollout_buffer.jsonl"
+        write_jsonl(buffer.to_records(), rollout_buffer_path)
+        post_metrics = evaluate_llm_policy(config, model, tokenizer, seed_offset=20_000)
 
-    final_checkpoint = save_model_checkpoint(
-        model,
-        tokenizer,
-        config,
-        config.output.checkpoints_dir / "final",
-    )
-    save_llm_rl_state(final_checkpoint, optimizer, episode_index=len(all_transcripts) + start_episode)
-    transcript_path = config.output.run_dir / config.rl_task.transcript_filename
-    write_transcripts(all_transcripts, transcript_path)
-    rollout_buffer_path = config.output.run_dir / "rollout_buffer.jsonl"
-    write_jsonl(buffer.to_records(), rollout_buffer_path)
-    post_metrics = evaluate_llm_policy(config, model, tokenizer, seed_offset=20_000)
-
-    rewards = [float(record["total_reward"]) for record in all_transcripts]
-    successes = [bool(record["success"]) for record in all_transcripts]
-    metrics = {
-        "mode": "at_grpo_llm",
-        "algorithm": "AT-GRPO LLM token-level policy update",
-        "num_episodes": len(all_transcripts),
-        "rollouts_per_problem": config.rl_task.rollouts_per_problem,
-        "num_rollouts": len(all_transcripts),
-        "num_rollout_steps": len(buffer.steps),
-        "num_branch_groups": len({step.group_id for step in buffer.steps}),
-        "num_branch_samples": len(buffer.steps),
-        "sampling_scheme": "tree-structured per-agent-turn branching",
-        "reward_team_weight": config.rl_task.reward_team_weight,
-        "success_rate": sum(successes) / len(successes) if successes else 0.0,
-        "mean_total_reward": statistics.fmean(rewards) if rewards else 0.0,
-        "mean_policy_loss": statistics.fmean(losses) if losses else 0.0,
-        "pre_success_rate": baseline_metrics["success_rate"],
-        "pre_mean_total_reward": baseline_metrics["mean_total_reward"],
-        "fixed_baseline_success_rate": fixed_baseline_metrics["success_rate"],
-        "fixed_baseline_mean_total_reward": fixed_baseline_metrics["mean_total_reward"],
-        "post_success_rate": post_metrics["success_rate"],
-        "post_mean_total_reward": post_metrics["mean_total_reward"],
-        "agreement_rate": post_metrics["success_rate"],
-        "reward_trend": rewards,
-        "latent_usage_distribution": buffer.latent_usage_distribution(),
-        "latent_usage_entropy": buffer.latent_usage_entropy(),
-        "latent_transition_entropy": buffer.latent_transition_entropy(),
-        "parser_failure_rate": buffer.parser_failure_rate(),
-        "transcript_path": str(transcript_path),
-        "rollout_buffer_path": str(rollout_buffer_path),
-        "checkpoint_path": str(final_checkpoint),
-    }
-    write_jsonl([metrics], config.output.metrics_path)
-    return metrics
+        rewards = [float(record["total_reward"]) for record in all_transcripts]
+        successes = [bool(record["success"]) for record in all_transcripts]
+        metrics = {
+            "mode": "at_grpo_llm",
+            "algorithm": "AT-GRPO LLM token-level policy update",
+            "num_episodes": len(all_transcripts),
+            "rollouts_per_problem": config.rl_task.rollouts_per_problem,
+            "num_rollouts": len(all_transcripts),
+            "num_rollout_steps": len(buffer.steps),
+            "num_branch_groups": len({step.group_id for step in buffer.steps}),
+            "num_branch_samples": len(buffer.steps),
+            "sampling_scheme": "tree-structured per-agent-turn branching",
+            "reward_team_weight": config.rl_task.reward_team_weight,
+            "success_rate": sum(successes) / len(successes) if successes else 0.0,
+            "mean_total_reward": statistics.fmean(rewards) if rewards else 0.0,
+            "mean_policy_loss": statistics.fmean(losses) if losses else 0.0,
+            "pre_success_rate": baseline_metrics["success_rate"],
+            "pre_mean_total_reward": baseline_metrics["mean_total_reward"],
+            "fixed_baseline_success_rate": fixed_baseline_metrics["success_rate"],
+            "fixed_baseline_mean_total_reward": fixed_baseline_metrics["mean_total_reward"],
+            "post_success_rate": post_metrics["success_rate"],
+            "post_mean_total_reward": post_metrics["mean_total_reward"],
+            "agreement_rate": post_metrics["success_rate"],
+            "reward_trend": rewards,
+            "latent_usage_distribution": buffer.latent_usage_distribution(),
+            "latent_usage_entropy": buffer.latent_usage_entropy(),
+            "latent_transition_entropy": buffer.latent_transition_entropy(),
+            "parser_failure_rate": buffer.parser_failure_rate(),
+            "transcript_path": str(transcript_path),
+            "rollout_buffer_path": str(rollout_buffer_path),
+            "checkpoint_path": str(final_checkpoint),
+        }
+        log_wandb_metrics(wandb_run, metrics, step=len(all_transcripts) + start_episode)
+        write_jsonl([metrics], config.output.metrics_path)
+        return metrics
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def train_at_grpo_smoke(config: ExperimentConfig) -> dict[str, Any]:
@@ -288,72 +340,98 @@ def train_at_grpo_smoke(config: ExperimentConfig) -> dict[str, Any]:
         yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    wandb_run = init_wandb_run(config)
 
-    rng = random.Random(config.runtime.seed)
-    policy, start_episode = load_or_create_policy(config, rng=rng)
-    pre_metrics = evaluate_policy(config, policy, seed_offset=10_000)
-    fixed_baseline_metrics = evaluate_fixed_baseline(config, seed_offset=30_000)
-
-    all_transcripts: list[dict[str, Any]] = []
-    buffer = RolloutBuffer()
-    for episode_index in range(start_episode, config.rl_task.num_episodes):
-        problem_seed = config.runtime.seed + episode_index
-        rollout = run_tree_rollout(
-            config,
-            policy,
-            episode_index=episode_index,
-            problem_seed=problem_seed,
+    try:
+        rng = random.Random(config.runtime.seed)
+        policy, start_episode = load_or_create_policy(config, rng=rng)
+        pre_metrics = evaluate_policy(config, policy, seed_offset=10_000)
+        fixed_baseline_metrics = evaluate_fixed_baseline(config, seed_offset=30_000)
+        log_wandb_metrics(
+            wandb_run,
+            {
+                "pre_success_rate": pre_metrics["success_rate"],
+                "pre_mean_total_reward": pre_metrics["mean_total_reward"],
+                "fixed_baseline_success_rate": fixed_baseline_metrics["success_rate"],
+                "fixed_baseline_mean_total_reward": fixed_baseline_metrics["mean_total_reward"],
+            },
+            step=start_episode,
         )
-        group_steps = rollout["steps"]
-        policy.update(
-            group_steps,
-            learning_rate=config.rl_task.latent_policy_learning_rate,
-        )
-        buffer.extend(group_steps)
-        all_transcripts.append(rollout["transcript"])
-        save_rl_checkpoint(config, policy, episode_index=episode_index + 1)
 
-    transcript_path = config.output.run_dir / config.rl_task.transcript_filename
-    write_transcripts(all_transcripts, transcript_path)
+        all_transcripts: list[dict[str, Any]] = []
+        buffer = RolloutBuffer()
+        for episode_index in range(start_episode, config.rl_task.num_episodes):
+            problem_seed = config.runtime.seed + episode_index
+            rollout = run_tree_rollout(
+                config,
+                policy,
+                episode_index=episode_index,
+                problem_seed=problem_seed,
+            )
+            group_steps = rollout["steps"]
+            policy.update(
+                group_steps,
+                learning_rate=config.rl_task.latent_policy_learning_rate,
+            )
+            buffer.extend(group_steps)
+            all_transcripts.append(rollout["transcript"])
+            log_wandb_metrics(
+                wandb_run,
+                {
+                    "episode": episode_index + 1,
+                    "total_reward": rollout["transcript"].get("total_reward", 0.0),
+                    "success": float(bool(rollout["transcript"].get("success", False))),
+                    "num_rollout_steps": len(group_steps),
+                },
+                step=episode_index + 1,
+            )
+            save_rl_checkpoint(config, policy, episode_index=episode_index + 1)
 
-    rollout_buffer_path = config.output.run_dir / "rollout_buffer.jsonl"
-    write_jsonl(buffer.to_records(), rollout_buffer_path)
+        transcript_path = config.output.run_dir / config.rl_task.transcript_filename
+        write_transcripts(all_transcripts, transcript_path)
 
-    post_metrics = evaluate_policy(config, policy, seed_offset=20_000)
-    rewards = [float(record["total_reward"]) for record in all_transcripts]
-    successes = [bool(record["success"]) for record in all_transcripts]
-    reward_trend = rewards
-    metrics = {
-        "mode": "at_grpo_smoke",
-        "algorithm": "AT-GRPO turn-wise grouped advantage",
-        "num_episodes": config.rl_task.num_episodes,
-        "rollouts_per_problem": config.rl_task.rollouts_per_problem,
-        "num_rollouts": len(all_transcripts),
-        "num_rollout_steps": len(buffer.steps),
-        "num_branch_groups": len({step.group_id for step in buffer.steps}),
-        "num_branch_samples": len(buffer.steps),
-        "sampling_scheme": "tree-structured per-agent-turn branching",
-        "reward_team_weight": config.rl_task.reward_team_weight,
-        "success_rate": sum(successes) / len(successes) if successes else 0.0,
-        "mean_total_reward": statistics.fmean(rewards) if rewards else 0.0,
-        "pre_success_rate": pre_metrics["success_rate"],
-        "pre_mean_total_reward": pre_metrics["mean_total_reward"],
-        "fixed_baseline_success_rate": fixed_baseline_metrics["success_rate"],
-        "fixed_baseline_mean_total_reward": fixed_baseline_metrics["mean_total_reward"],
-        "post_success_rate": post_metrics["success_rate"],
-        "post_mean_total_reward": post_metrics["mean_total_reward"],
-        "agreement_rate": post_metrics["success_rate"],
-        "reward_trend": reward_trend,
-        "latent_usage_distribution": buffer.latent_usage_distribution(),
-        "latent_usage_entropy": buffer.latent_usage_entropy(),
-        "latent_transition_entropy": buffer.latent_transition_entropy(),
-        "parser_failure_rate": buffer.parser_failure_rate(),
-        "transcript_path": str(transcript_path),
-        "rollout_buffer_path": str(rollout_buffer_path),
-        "checkpoint_path": str(config.output.checkpoints_dir / config.rl_task.checkpoint_filename),
-    }
-    write_jsonl([metrics], config.output.metrics_path)
-    return metrics
+        rollout_buffer_path = config.output.run_dir / "rollout_buffer.jsonl"
+        write_jsonl(buffer.to_records(), rollout_buffer_path)
+
+        post_metrics = evaluate_policy(config, policy, seed_offset=20_000)
+        rewards = [float(record["total_reward"]) for record in all_transcripts]
+        successes = [bool(record["success"]) for record in all_transcripts]
+        reward_trend = rewards
+        metrics = {
+            "mode": "at_grpo_smoke",
+            "algorithm": "AT-GRPO turn-wise grouped advantage",
+            "num_episodes": config.rl_task.num_episodes,
+            "rollouts_per_problem": config.rl_task.rollouts_per_problem,
+            "num_rollouts": len(all_transcripts),
+            "num_rollout_steps": len(buffer.steps),
+            "num_branch_groups": len({step.group_id for step in buffer.steps}),
+            "num_branch_samples": len(buffer.steps),
+            "sampling_scheme": "tree-structured per-agent-turn branching",
+            "reward_team_weight": config.rl_task.reward_team_weight,
+            "success_rate": sum(successes) / len(successes) if successes else 0.0,
+            "mean_total_reward": statistics.fmean(rewards) if rewards else 0.0,
+            "pre_success_rate": pre_metrics["success_rate"],
+            "pre_mean_total_reward": pre_metrics["mean_total_reward"],
+            "fixed_baseline_success_rate": fixed_baseline_metrics["success_rate"],
+            "fixed_baseline_mean_total_reward": fixed_baseline_metrics["mean_total_reward"],
+            "post_success_rate": post_metrics["success_rate"],
+            "post_mean_total_reward": post_metrics["mean_total_reward"],
+            "agreement_rate": post_metrics["success_rate"],
+            "reward_trend": reward_trend,
+            "latent_usage_distribution": buffer.latent_usage_distribution(),
+            "latent_usage_entropy": buffer.latent_usage_entropy(),
+            "latent_transition_entropy": buffer.latent_transition_entropy(),
+            "parser_failure_rate": buffer.parser_failure_rate(),
+            "transcript_path": str(transcript_path),
+            "rollout_buffer_path": str(rollout_buffer_path),
+            "checkpoint_path": str(config.output.checkpoints_dir / config.rl_task.checkpoint_filename),
+        }
+        log_wandb_metrics(wandb_run, metrics, step=len(all_transcripts) + start_episode)
+        write_jsonl([metrics], config.output.metrics_path)
+        return metrics
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def load_or_create_rl_model(config: ExperimentConfig):

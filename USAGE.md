@@ -114,6 +114,19 @@ GPUS=0 scripts/grpo.sh
 
 この一括実行は smoke backend ではなく、SFT、SFT checkpoint からの Distill、Distill checkpoint からの LLM AT-GRPO を順に実行する。標準 config は全データと `num_train_epochs` / `num_episodes` / `num_tasks` に基づいて実行するため、短時間確認では各 config のサンプル数やステップ数を明示的に小さくする。
 
+## WandB ログ
+
+標準 config は `training.report_to: wandb` になっている。初回だけ以下でログインし、必要なら project 名を指定してから実行する。
+
+```bash
+uv run wandb login
+WANDB_PROJECT=llm-emotion-test GPUS=0,1,2 scripts/sft.sh
+WANDB_PROJECT=llm-emotion-test GPUS=0,1 scripts/distil.sh
+WANDB_PROJECT=llm-emotion-test GPUS=0 scripts/grpo.sh
+```
+
+ログ送信を止めたい場合は対象 config の `training.report_to` を `none` にする。
+
 ## 7. 対話サンプル
 
 ```bash

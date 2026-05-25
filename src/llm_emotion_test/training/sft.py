@@ -182,6 +182,7 @@ def build_training_arguments(config: ExperimentConfig) -> TrainingArguments:
         "weight_decay": config.training.weight_decay,
         "save_strategy": "steps" if config.training.save_steps else "no",
         "report_to": [] if config.training.report_to == "none" else [config.training.report_to],
+        "run_name": config.experiment_name,
         "remove_unused_columns": False,
         "bf16": config.training.precision == "bf16",
         "fp16": config.training.precision == "fp16",

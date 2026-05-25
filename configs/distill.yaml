@@ -42,7 +42,7 @@ training:
   eval_max_samples: 32
   sample_count: 8
   generation_max_new_tokens: 128
-  report_to: none
+  report_to: wandb
 distillation:
   teacher_model: Qwen/Qwen3.5-9B
   teacher_torch_dtype: bfloat16

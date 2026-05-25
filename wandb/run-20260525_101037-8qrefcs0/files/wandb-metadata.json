@@ -1,0 +1,60 @@
+{
+  "os": "Linux-6.8.0-94-generic-x86_64-with-glibc2.39",
+  "python": "CPython 3.12.3",
+  "startedAt": "2026-05-25T01:10:37.214330Z",
+  "args": [
+    "train-sft",
+    "--config",
+    "configs/sft.yaml"
+  ],
+  "program": "-m llm_emotion_test.main",
+  "git": {
+    "remote": "https://github.com/Azuma413/LLM-Emotion-Test.git",
+    "commit": "f6179943edd0e74bc1c5944bc22339605d30fc12"
+  },
+  "email": "hirekatsu0523@gmail.com",
+  "root": "/data1/hiratsuka/SourceCode/LLM-Emotion-Test",
+  "host": "swift",
+  "executable": "/data1/hiratsuka/SourceCode/LLM-Emotion-Test/.venv/bin/python",
+  "cpu_count": 44,
+  "cpu_count_logical": 88,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+  "gpu_count": 3,
+  "disk": {
+    "/": {
+      "total": "965895782400",
+      "used": "78325202944"
+    }
+  },
+  "memory": {
+    "total": "540297969664"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "memoryTotal": "102641958912",
+      "cudaCores": 24064,
+      "architecture": "Blackwell",
+      "uuid": "GPU-d4edcf43-8e49-a2b3-8bec-d850ad0bd039"
+    },
+    {
+      "name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "memoryTotal": "102641958912",
+      "cudaCores": 24064,
+      "architecture": "Blackwell",
+      "uuid": "GPU-d285f592-411e-e73e-5cd3-37f76b2af321"
+    },
+    {
+      "name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "memoryTotal": "102641958912",
+      "cudaCores": 24064,
+      "architecture": "Blackwell",
+      "uuid": "GPU-e1ea83d0-4712-0fdc-f82b-23153f001fbd"
+    }
+  ],
+  "cudaVersion": "13.0",
+  "slurm": {
+    "root": "/opt/slurm/24.11.0"
+  },
+  "writerId": "ynsm4oiai8pmi93bixconvuebwxzzwv6"
+}
